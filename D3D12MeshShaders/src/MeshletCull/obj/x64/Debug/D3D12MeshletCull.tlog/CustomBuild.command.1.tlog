@@ -1,0 +1,14 @@
+^C:\USERS\SARADIP\DESKTOP\LAB5_OLAR\DIRECTX-GRAPHICS-SAMPLES\SAMPLES\DESKTOP\D3D12MESHSHADERS\SRC\MESHLETCULL\BOUNDINGSPHEREMS.HLSL
+dxc.exe -nologo -Tms_6_5 -E"main" -Zi -Qembed_debug -Fo"bin\x64\Debug\BoundingSphereMS.cso" "C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletCull\BoundingSphereMS.hlsl"
+^C:\USERS\SARADIP\DESKTOP\LAB5_OLAR\DIRECTX-GRAPHICS-SAMPLES\SAMPLES\DESKTOP\D3D12MESHSHADERS\SRC\MESHLETCULL\DEBUGDRAWPS.HLSL
+dxc.exe -nologo -Tps_6_3 -E"main" -Zi -Qembed_debug -Fo"bin\x64\Debug\DebugDrawPS.cso" "C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletCull\DebugDrawPS.hlsl"
+^C:\USERS\SARADIP\DESKTOP\LAB5_OLAR\DIRECTX-GRAPHICS-SAMPLES\SAMPLES\DESKTOP\D3D12MESHSHADERS\SRC\MESHLETCULL\FRUSTUMMS.HLSL
+dxc.exe -nologo -Tms_6_5 -E"main" -Zi -Qembed_debug -Fo"bin\x64\Debug\FrustumMS.cso" "C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletCull\FrustumMS.hlsl"
+^C:\USERS\SARADIP\DESKTOP\LAB5_OLAR\DIRECTX-GRAPHICS-SAMPLES\SAMPLES\DESKTOP\D3D12MESHSHADERS\SRC\MESHLETCULL\MESHLETAS.HLSL
+dxc.exe -nologo -Tas_6_5 -E"main" -Zi -Qembed_debug -Fo"bin\x64\Debug\MeshletAS.cso" "C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletCull\MeshletAS.hlsl"
+^C:\USERS\SARADIP\DESKTOP\LAB5_OLAR\DIRECTX-GRAPHICS-SAMPLES\SAMPLES\DESKTOP\D3D12MESHSHADERS\SRC\MESHLETCULL\MESHLETMS.HLSL
+dxc.exe -nologo -Tms_6_5 -E"main" -Zi -Qembed_debug -Fo"bin\x64\Debug\MeshletMS.cso" "C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletCull\MeshletMS.hlsl"
+^C:\USERS\SARADIP\DESKTOP\LAB5_OLAR\DIRECTX-GRAPHICS-SAMPLES\SAMPLES\DESKTOP\D3D12MESHSHADERS\SRC\MESHLETCULL\MESHLETPS.HLSL
+dxc.exe -nologo -Tps_6_3 -E"main" -Zi -Qembed_debug -Fo"bin\x64\Debug\MeshletPS.cso" "C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletCull\MeshletPS.hlsl"
+^C:\USERS\SARADIP\DESKTOP\LAB5_OLAR\DIRECTX-GRAPHICS-SAMPLES\SAMPLES\DESKTOP\D3D12MESHSHADERS\SRC\MESHLETCULL\NORMALCONEMS.HLSL
+dxc.exe -nologo -Tms_6_5 -E"main" -Zi -Qembed_debug -Fo"bin\x64\Debug\NormalConeMS.cso" "C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletCull\NormalConeMS.hlsl"

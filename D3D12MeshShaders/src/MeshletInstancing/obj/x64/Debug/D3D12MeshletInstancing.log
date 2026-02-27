@@ -1,0 +1,12 @@
+﻿  MeshletMS.hlsl
+  MeshletPS.hlsl
+  stdafx.cpp
+  D3D12MeshletInstancing.cpp
+  DXSample.cpp
+  Main.cpp
+  Model.cpp
+  SimpleCamera.cpp
+  Win32Application.cpp
+  Создание кода...
+     Создается библиотека bin\x64\Debug\D3D12MeshletInstancing.lib и объект bin\x64\Debug\D3D12MeshletInstancing.exp
+  D3D12MeshletInstancing.vcxproj -> C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletInstancing\bin\x64\Debug\D3D12MeshletInstancing.exe

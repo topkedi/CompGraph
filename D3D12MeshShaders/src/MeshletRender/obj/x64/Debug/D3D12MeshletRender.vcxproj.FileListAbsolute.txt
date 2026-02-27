@@ -1,0 +1,8 @@
+C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletRender\bin\x64\Debug\D3D12\D3D12Core.dll
+C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletRender\bin\x64\Debug\D3D12\D3D12Core.pdb
+C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletRender\bin\x64\Debug\D3D12\D3D12SDKLayers.dll
+C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletRender\bin\x64\Debug\D3D12\D3D12SDKLayers.pdb
+C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletRender\bin\x64\Debug\dxcompiler.dll
+C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletRender\bin\x64\Debug\dxcompiler.pdb
+C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletRender\bin\x64\Debug\dxil.dll
+C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletRender\bin\x64\Debug\dxil.pdb

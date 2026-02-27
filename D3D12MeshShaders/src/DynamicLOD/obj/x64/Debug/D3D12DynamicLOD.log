@@ -1,0 +1,13 @@
+﻿  MeshletAS.hlsl
+  MeshletMS.hlsl
+  MeshletPS.hlsl
+  stdafx.cpp
+  D3D12DynamicLOD.cpp
+  DXSample.cpp
+  Main.cpp
+  Model.cpp
+  SimpleCamera.cpp
+  Win32Application.cpp
+  Создание кода...
+     Создается библиотека bin\x64\Debug\D3D12DynamicLOD.lib и объект bin\x64\Debug\D3D12DynamicLOD.exp
+  D3D12DynamicLOD.vcxproj -> C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\DynamicLOD\bin\x64\Debug\D3D12DynamicLOD.exe

@@ -1,0 +1,8 @@
+﻿  stdafx.cpp
+  Export.cpp
+  Main.cpp
+  MeshProcessor.cpp
+  Import.cpp
+  Создание кода...
+     Создается библиотека bin\x64\Debug\D3D12WavefrontConverter.lib и объект bin\x64\Debug\D3D12WavefrontConverter.exp
+  D3D12WavefrontConverter.vcxproj -> C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\WavefrontConverter\bin\x64\Debug\D3D12WavefrontConverter.exe
