@@ -1,0 +1,82 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Assets">
+      <UniqueIdentifier>955e77e1-1a69-4abd-b526-044beea6e3c5</UniqueIdentifier>
+      <Extensions>ico;cur;bmp;dds;dlg;fbx;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tga;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Sources">
+      <UniqueIdentifier>{4896933f-5837-4486-a88b-3f9df542da1e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Common">
+      <UniqueIdentifier>{af065705-1c72-4111-8c48-443d53aaa56c}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="sources\Camera.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\Game.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\pch.h">
+      <Filter>Common</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\ShaderManager.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\StepTimer.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\World.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\stb_image.h" />
+    <ClInclude Include="shaders\Common.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="sources\Camera.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Game.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Main.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\pch.cpp">
+      <Filter>Common</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\ShaderManager.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\World.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="settings.manifest">
+      <Filter>Assets</Filter>
+    </Manifest>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resource.rc">
+      <Filter>Assets</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config">
+      <Filter>Assets</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="resources\directx.ico">
+      <Filter>Assets</Filter>
+    </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="shaders\ps.hlsl" />
+    <FxCompile Include="shaders\hs.hlsl" />
+    <FxCompile Include="shaders\vs.hlsl" />
+  </ItemGroup>
+</Project>
