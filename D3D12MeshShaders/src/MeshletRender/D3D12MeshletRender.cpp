@@ -32,6 +32,7 @@ D3D12MeshletRender::D3D12MeshletRender(UINT width, UINT height, std::wstring nam
     , m_frameCounter(0)
     , m_fenceEvent{}
     , m_fenceValues{}
+    , m_drawMeshlets(false)
 { }
 
 void D3D12MeshletRender::OnInit()
@@ -149,7 +150,7 @@ void D3D12MeshletRender::LoadPipeline()
 
         m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-        // Describe and create a render target view (RTV) descriptor heap.
+        // Describe and create a depth stencil view (DSV) descriptor heap.
         D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
         dsvHeapDesc.NumDescriptors = 1;
         dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
@@ -157,6 +158,12 @@ void D3D12MeshletRender::LoadPipeline()
         ThrowIfFailed(m_device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&m_dsvHeap)));
 
         m_dsvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+        D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
+        srvHeapDesc.NumDescriptors = 3;
+        srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ThrowIfFailed(m_device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&m_srvHeap)));
     }
 
     // Create frame resources.
@@ -301,18 +308,150 @@ void D3D12MeshletRender::LoadAssets()
         ThrowIfFailed(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
         m_fenceValues[m_frameIndex]++;
 
-        // Create an event handle to use for frame synchronization.
         m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         if (m_fenceEvent == nullptr)
         {
             ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
         }
 
-        // Wait for the command list to execute; we are reusing the same command 
-        // list in our main loop but for now, we just want to wait for setup to 
-        // complete before continuing.
+        LoadTexture();
+
         WaitForGpu();
     }
+}
+
+#include "..\TextureLoader\DDSTextureLoader12.h"
+
+void D3D12MeshletRender::LoadTexture()
+{
+    std::unique_ptr<uint8_t[]> ddsDataDiffuse;
+    std::unique_ptr<uint8_t[]> ddsDataNormal;
+    std::unique_ptr<uint8_t[]> ddsDataAO;
+    
+    std::vector<D3D12_SUBRESOURCE_DATA> subresourcesDiffuse;
+    std::vector<D3D12_SUBRESOURCE_DATA> subresourcesNormal;
+    std::vector<D3D12_SUBRESOURCE_DATA> subresourcesAO;
+
+    std::wstring diffusePath = GetAssetFullPath(L"seeds2.dds");
+    std::wstring normalPath = GetAssetFullPath(L"BPine03_NormalsMap.dds");
+    std::wstring aoPath = GetAssetFullPath(L"BPine03_ao.dds");
+
+    HRESULT hr = DirectX::LoadDDSTextureFromFile(
+        m_device.Get(),
+        diffusePath.c_str(),
+        &m_textureDiffuse,
+        ddsDataDiffuse,
+        subresourcesDiffuse);
+
+    if (FAILED(hr))
+    {
+        OutputDebugStringA("Failed to load diffuse texture!\n");
+        return;
+    }
+
+    hr = DirectX::LoadDDSTextureFromFile(
+        m_device.Get(),
+        normalPath.c_str(),
+        &m_textureNormal,
+        ddsDataNormal,
+        subresourcesNormal);
+
+    if (FAILED(hr))
+    {
+        OutputDebugStringA("Failed to load normal texture!\n");
+        return;
+    }
+
+    hr = DirectX::LoadDDSTextureFromFile(
+        m_device.Get(),
+        aoPath.c_str(),
+        &m_textureAO,
+        ddsDataAO,
+        subresourcesAO);
+
+    if (FAILED(hr))
+    {
+        OutputDebugStringA("Failed to load AO texture!\n");
+        return;
+    }
+
+    const UINT64 uploadBufferSizeDiffuse = GetRequiredIntermediateSize(m_textureDiffuse.Get(), 0, static_cast<UINT>(subresourcesDiffuse.size()));
+    const UINT64 uploadBufferSizeNormal = GetRequiredIntermediateSize(m_textureNormal.Get(), 0, static_cast<UINT>(subresourcesNormal.size()));
+    const UINT64 uploadBufferSizeAO = GetRequiredIntermediateSize(m_textureAO.Get(), 0, static_cast<UINT>(subresourcesAO.size()));
+    const UINT64 uploadBufferSize = uploadBufferSizeDiffuse + uploadBufferSizeNormal + uploadBufferSizeAO;
+
+    const CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
+    const CD3DX12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+    
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &uploadHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &uploadBufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&m_textureUploadHeap)));
+
+    ThrowIfFailed(m_commandAllocators[m_frameIndex]->Reset());
+    ThrowIfFailed(m_commandList->Reset(m_commandAllocators[m_frameIndex].Get(), nullptr));
+
+    UpdateSubresources(
+        m_commandList.Get(),
+        m_textureDiffuse.Get(),
+        m_textureUploadHeap.Get(),
+        0,
+        0,
+        static_cast<UINT>(subresourcesDiffuse.size()),
+        subresourcesDiffuse.data());
+
+    UpdateSubresources(
+        m_commandList.Get(),
+        m_textureNormal.Get(),
+        m_textureUploadHeap.Get(),
+        uploadBufferSizeDiffuse,
+        0,
+        static_cast<UINT>(subresourcesNormal.size()),
+        subresourcesNormal.data());
+
+    UpdateSubresources(
+        m_commandList.Get(),
+        m_textureAO.Get(),
+        m_textureUploadHeap.Get(),
+        uploadBufferSizeDiffuse + uploadBufferSizeNormal,
+        0,
+        static_cast<UINT>(subresourcesAO.size()),
+        subresourcesAO.data());
+
+    D3D12_RESOURCE_BARRIER barriers[3] = {
+        CD3DX12_RESOURCE_BARRIER::Transition(m_textureDiffuse.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+        CD3DX12_RESOURCE_BARRIER::Transition(m_textureNormal.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+        CD3DX12_RESOURCE_BARRIER::Transition(m_textureAO.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+    };
+    m_commandList->ResourceBarrier(3, barriers);
+
+    ThrowIfFailed(m_commandList->Close());
+    ID3D12CommandList* ppCommandLists[] = { m_commandList.Get() };
+    m_commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+
+    UINT srvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(m_srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+
+    srvDesc.Format = m_textureDiffuse->GetDesc().Format;
+    srvDesc.Texture2D.MipLevels = m_textureDiffuse->GetDesc().MipLevels;
+    m_device->CreateShaderResourceView(m_textureDiffuse.Get(), &srvDesc, srvHandle);
+
+    srvHandle.Offset(1, srvDescriptorSize);
+    srvDesc.Format = m_textureNormal->GetDesc().Format;
+    srvDesc.Texture2D.MipLevels = m_textureNormal->GetDesc().MipLevels;
+    m_device->CreateShaderResourceView(m_textureNormal.Get(), &srvDesc, srvHandle);
+
+    srvHandle.Offset(1, srvDescriptorSize);
+    srvDesc.Format = m_textureAO->GetDesc().Format;
+    srvDesc.Texture2D.MipLevels = m_textureAO->GetDesc().MipLevels;
+    m_device->CreateShaderResourceView(m_textureAO.Get(), &srvDesc, srvHandle);
 }
 
 // Update frame-based values.
@@ -337,7 +476,10 @@ void D3D12MeshletRender::OnUpdate()
     XMStoreFloat4x4(&m_constantBufferData.World, XMMatrixTranspose(world));
     XMStoreFloat4x4(&m_constantBufferData.WorldView, XMMatrixTranspose(world * view));
     XMStoreFloat4x4(&m_constantBufferData.WorldViewProj, XMMatrixTranspose(world * view * proj));
-    m_constantBufferData.DrawMeshlets = true;
+    m_constantBufferData.DrawMeshlets = m_drawMeshlets;
+    m_constantBufferData.Time = static_cast<float>(m_timer.GetTotalSeconds());
+    m_constantBufferData.AnimationAmplitude = 0.0f;
+    m_constantBufferData.AnimationFrequency = 1.0f;
 
     memcpy(m_cbvDataBegin + sizeof(SceneConstantBuffer) * m_frameIndex, &m_constantBufferData, sizeof(m_constantBufferData));
 }
@@ -370,12 +512,19 @@ void D3D12MeshletRender::OnDestroy()
 void D3D12MeshletRender::OnKeyDown(UINT8 key)
 {
     m_camera.OnKeyDown(key);
+    
+    if (key == VK_CONTROL)
+        m_drawMeshlets = !m_drawMeshlets;
 }
 
 void D3D12MeshletRender::OnKeyUp(UINT8 key)
 {
     m_camera.OnKeyUp(key);
 }
+
+void D3D12MeshletRender::OnMouseMove(int x, int y, bool leftButtonDown) { }
+void D3D12MeshletRender::OnMouseDown(int button, int x, int y) { }
+void D3D12MeshletRender::OnMouseUp(int button, int x, int y) { }
 
 void D3D12MeshletRender::PopulateCommandList()
 {
@@ -389,8 +538,11 @@ void D3D12MeshletRender::PopulateCommandList()
     // re-recording.
     ThrowIfFailed(m_commandList->Reset(m_commandAllocators[m_frameIndex].Get(), m_pipelineState.Get()));
 
-    // Set necessary state.
     m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
+    
+    ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
+    m_commandList->SetDescriptorHeaps(1, heaps);
+    
     m_commandList->RSSetViewports(1, &m_viewport);
     m_commandList->RSSetScissorRects(1, &m_scissorRect);
 
@@ -408,6 +560,7 @@ void D3D12MeshletRender::PopulateCommandList()
     m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
     m_commandList->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress() + sizeof(SceneConstantBuffer) * m_frameIndex);
+    m_commandList->SetGraphicsRootDescriptorTable(6, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
 
     for (auto& mesh : m_model)
     {

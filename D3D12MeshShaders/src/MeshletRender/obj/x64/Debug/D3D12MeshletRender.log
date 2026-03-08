@@ -1,2 +1,13 @@
-﻿  D3D12MeshletRender.cpp
+﻿  MeshletMS.hlsl
+  MeshletPS.hlsl
+  stdafx.cpp
+  D3D12MeshletRender.cpp
+  DXSample.cpp
+  Main.cpp
+  Model.cpp
+  SimpleCamera.cpp
+  Win32Application.cpp
+  Создание кода...
+  DDSTextureLoader12.cpp
+     Создается библиотека bin\x64\Debug\D3D12MeshletRender.lib и объект bin\x64\Debug\D3D12MeshletRender.exp
   D3D12MeshletRender.vcxproj -> C:\Users\Saradip\Desktop\lab5_Olar\DirectX-Graphics-Samples\Samples\Desktop\D3D12MeshShaders\src\MeshletRender\bin\x64\Debug\D3D12MeshletRender.exe

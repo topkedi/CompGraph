@@ -14,7 +14,9 @@
                   SRV(t0), \
                   SRV(t1), \
                   SRV(t2), \
-                  SRV(t3)"
+                  SRV(t3), \
+                  DescriptorTable(SRV(t4, numDescriptors=3, flags=DESCRIPTORS_VOLATILE)), \
+                  StaticSampler(s0, filter = FILTER_MIN_MAG_MIP_LINEAR, addressU = TEXTURE_ADDRESS_WRAP, addressV = TEXTURE_ADDRESS_WRAP)"
 
 struct Constants
 {
@@ -22,6 +24,9 @@ struct Constants
     float4x4 WorldView;
     float4x4 WorldViewProj;
     uint     DrawMeshlets;
+    float    Time;
+    float    AnimationAmplitude;
+    float    AnimationFrequency;
 };
 
 struct MeshInfo
@@ -40,7 +45,9 @@ struct VertexOut
 {
     float4 PositionHS   : SV_Position;
     float3 PositionVS   : POSITION0;
+    float3 PositionWS   : POSITION1;
     float3 Normal       : NORMAL0;
+    float2 TexCoord     : TEXCOORD0;
     uint   MeshletIndex : COLOR0;
 };
 
@@ -97,6 +104,13 @@ uint GetVertexIndex(Meshlet m, uint localIndex)
     }
 }
 
+// Generate procedural UV coordinates based on position
+float2 GenerateUV(float3 pos)
+{
+    float3 n = normalize(pos);
+    return float2(0.5 + atan2(n.z, n.x) / 6.28318530718, 0.5 - asin(n.y) / 3.14159265359);
+}
+
 VertexOut GetVertexAttributes(uint meshletIndex, uint vertexIndex)
 {
     Vertex v = Vertices[vertexIndex];
@@ -104,7 +118,9 @@ VertexOut GetVertexAttributes(uint meshletIndex, uint vertexIndex)
     VertexOut vout;
     vout.PositionVS = mul(float4(v.Position, 1), Globals.WorldView).xyz;
     vout.PositionHS = mul(float4(v.Position, 1), Globals.WorldViewProj);
+    vout.PositionWS = mul(float4(v.Position, 1), Globals.World).xyz;
     vout.Normal = mul(float4(v.Normal, 0), Globals.World).xyz;
+    vout.TexCoord = GenerateUV(v.Position);
     vout.MeshletIndex = meshletIndex;
 
     return vout;
