@@ -79,6 +79,11 @@ void TerrainApp::OnResize()
 
 void TerrainApp::Update(const GameTimer& gt)
 {
+    // Rotate sun over time (full cycle in 60 seconds)
+    mSunAngle += gt.DeltaTime() * DirectX::XM_2PI / 25.0f;
+    if (mSunAngle > DirectX::XM_2PI)
+        mSunAngle -= DirectX::XM_2PI;
+    
     UpdateConstants(gt);
     UpdateAtmosphereConstants(gt);
     CullTiles();
