@@ -31,6 +31,13 @@ struct PassConstants
     float NoiseSeed;
 };
 
+struct CraterParams
+{
+    DirectX::XMFLOAT2 CenterUV;
+    float RadiusUV;
+    float Depth;
+};
+
 struct TerrainTileInfo
 {
     int TileX;
@@ -65,18 +72,28 @@ private:
     virtual void OnKeyPressed(const GameTimer& gt, WPARAM key) override;
 
     void CreateRootSignature();
+    void CreateComputeRootSignature();
     void CompileShaders();
     void CreatePipelineState();
+    void CreateComputePipelineState();
     void GenerateTerrainMesh();
     void SetupDescriptorHeaps();
     void LoadTerrainTextures();
     void UpdateConstants(const GameTimer& gt);
     void CullTiles();
     DirectX::BoundingFrustum BuildFrustum() const;
+    
+    void InitializeCraterMap();
+    void ApplyCraterDeformation(const DirectX::XMFLOAT2& uv);
+    bool RayTerrainIntersection(const DirectX::XMFLOAT3& rayOrigin, const DirectX::XMFLOAT3& rayDir, DirectX::XMFLOAT3& hitPos);
+    DirectX::XMFLOAT2 WorldToUV(const DirectX::XMFLOAT3& worldPos);
+    float SampleHeightmap(float u, float v);
 
 private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mComputeRootSignature = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mSrvDescriptorHeap = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mUavDescriptorHeap = nullptr;
 
     std::unordered_map<std::string, Microsoft::WRL::ComPtr<ID3DBlob>> mShaders;
     std::unordered_map<std::string, Microsoft::WRL::ComPtr<ID3D12PipelineState>> mPSOs;
@@ -98,8 +115,19 @@ private:
 
     std::vector<std::unique_ptr<Texture>> mTextures;
     int mHeightmapSrvIndex = -1;
+    int mCraterMapSrvIndex = -1;
+    
+    // CPU копия heightmap для ray casting
+    std::vector<float> mHeightmapData;
+    UINT mHeightmapWidth = 0;
+    UINT mHeightmapHeight = 0;
 
     std::unique_ptr<UploadBuffer<PassConstants>> mPassCB = nullptr;
+    std::unique_ptr<UploadBuffer<CraterParams>> mCraterParamsCB = nullptr;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mCraterMap = nullptr;
+    UINT mCraterMapWidth = 2048;
+    UINT mCraterMapHeight = 2048;
 
     Camera mCamera;
     POINT mLastMousePos;
@@ -111,4 +139,6 @@ private:
     
     bool mWireframeMode = false;
     float mNoiseSeed = 0.0f;
+    float mCraterRadius = 0.01f;
+    float mCraterDepth = -10.0f;  // Уменьшил с -50 до -10 для небольших впадин
 };

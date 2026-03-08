@@ -1,6 +1,6 @@
 #include "Common.h"
 
-Texture2D colorTexture : register(t1);  // Color texture at t1 (heightmap is at t0)
+Texture2D colorTexture : register(t2);
 SamplerState samplerState : register(s0);
 
 float4 PS(PixelIn input) : SV_TARGET

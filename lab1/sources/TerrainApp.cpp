@@ -3,6 +3,7 @@
 #include <sstream>
 #include <ctime>
 #include <cstdlib>
+#include <fstream>
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
@@ -34,10 +35,13 @@ bool TerrainApp::Initialize()
 
     LoadTerrainTextures();
     CreateRootSignature();
+    CreateComputeRootSignature();
     CompileShaders();
     GenerateTerrainMesh();
     SetupDescriptorHeaps();
+    InitializeCraterMap();
     CreatePipelineState();
+    CreateComputePipelineState();
 
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
@@ -46,6 +50,7 @@ bool TerrainApp::Initialize()
     FlushCommandQueue();
 
     mPassCB = std::make_unique<UploadBuffer<PassConstants>>(md3dDevice.Get(), 1, true);
+    mCraterParamsCB = std::make_unique<UploadBuffer<CraterParams>>(md3dDevice.Get(), 1, true);
 
     std::vector<float> lodDistances = { 300.0f, 900.0f, 1500.0f };
     float terrainSize = (float)(TilesX * TileSize);
@@ -97,6 +102,10 @@ void TerrainApp::Draw(const GameTimer& gt)
     heightmapHandle.Offset(mHeightmapSrvIndex, mCbvSrvUavDescriptorSize);
     mCommandList->SetGraphicsRootDescriptorTable(1, heightmapHandle);
 
+    CD3DX12_GPU_DESCRIPTOR_HANDLE craterMapHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    craterMapHandle.Offset(mCraterMapSrvIndex, mCbvSrvUavDescriptorSize);
+    mCommandList->SetGraphicsRootDescriptorTable(2, craterMapHandle);
+
     mCommandList->IASetVertexBuffers(0, 1, &mTerrainVBV);
     mCommandList->IASetIndexBuffer(&mTerrainIBV);
     mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
@@ -116,7 +125,7 @@ void TerrainApp::Draw(const GameTimer& gt)
         {
             CD3DX12_GPU_DESCRIPTOR_HANDLE colorHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
             colorHandle.Offset(texIndex, mCbvSrvUavDescriptorSize);
-            mCommandList->SetGraphicsRootDescriptorTable(2, colorHandle);
+            mCommandList->SetGraphicsRootDescriptorTable(3, colorHandle);
         }
 
         mCommandList->DrawIndexedInstanced(tile->IndexCount, 1, tile->IndexOffset, tile->VertexOffset, 0);
@@ -153,10 +162,83 @@ void TerrainApp::OnMouseMove(WPARAM btnState, int x, int y)
     if ((btnState & MK_LBUTTON) != 0)
     {
         float deltaX = 0.15f * static_cast<float>(x - mLastMousePos.x);
-        float deltaY = 0.15f * static_cast<float>(y - mLastMousePos.y);
+        float deltaY = -0.15f * static_cast<float>(y - mLastMousePos.y);  // Инвертировано
 
         mCamera.RotateYaw(deltaX);
         mCamera.RotatePitch(deltaY);
+    }
+
+    bool ctrlPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    if (ctrlPressed)
+    {
+        // Преобразуем координаты мыши в NDC [-1, 1]
+        float mouseNdcX = (2.0f * x) / mClientWidth - 1.0f;
+        float mouseNdcY = 1.0f - (2.0f * y) / mClientHeight;
+
+        // Получаем матрицы (они уже транспонированы в Camera)
+        // Поэтому нужно транспонировать обратно для правильных вычислений
+        XMMATRIX view = XMMatrixTranspose(mCamera.GetViewMatrix());
+        XMMATRIX proj = XMMatrixTranspose(mCamera.GetProjectionMatrix());
+        
+        // Альтернативный метод: используем invProj и invView отдельно
+        XMMATRIX invView = XMMatrixInverse(nullptr, view);
+        XMMATRIX invProj = XMMatrixInverse(nullptr, proj);
+        
+        // Точка в clip space
+        XMVECTOR rayClip = XMVectorSet(mouseNdcX, mouseNdcY, 1.0f, 1.0f);
+        
+        // Преобразуем в view space
+        XMVECTOR rayView = XMVector4Transform(rayClip, invProj);
+        rayView = XMVectorSet(XMVectorGetX(rayView), XMVectorGetY(rayView), 1.0f, 0.0f);
+        
+        // Преобразуем в world space
+        XMVECTOR rayWorld = XMVector4Transform(rayView, invView);
+        XMVECTOR rayDir = XMVector3Normalize(rayWorld);
+
+        XMFLOAT3 rayOrigin = mCamera.GetPosition();
+        XMFLOAT3 rayDirection;
+        XMStoreFloat3(&rayDirection, rayDir);
+
+        // Отладка
+        static int debugCounter = 0;
+        bool shouldDebug = (++debugCounter % 30 == 0);
+        
+        if (shouldDebug)
+        {
+            OutputDebugStringA("\n=== CRATER DEBUG ===\n");
+            OutputDebugStringA((std::string("Mouse screen: (" + std::to_string(x) + "," + std::to_string(y) + ")\n").c_str()));
+            OutputDebugStringA((std::string("Mouse NDC: (" + std::to_string(mouseNdcX) + "," + std::to_string(mouseNdcY) + ")\n").c_str()));
+            OutputDebugStringA((std::string("Camera: (" + std::to_string(rayOrigin.x) + "," + 
+                              std::to_string(rayOrigin.y) + "," + std::to_string(rayOrigin.z) + ")\n").c_str()));
+            OutputDebugStringA((std::string("Ray dir: (" + std::to_string(rayDirection.x) + "," + 
+                              std::to_string(rayDirection.y) + "," + std::to_string(rayDirection.z) + ")\n").c_str()));
+        }
+
+        XMFLOAT3 hitPos;
+        if (RayTerrainIntersection(rayOrigin, rayDirection, hitPos))
+        {
+            XMFLOAT2 uv = WorldToUV(hitPos);
+            
+            if (shouldDebug)
+            {
+                OutputDebugStringA((std::string("HIT: world(" + std::to_string(hitPos.x) + "," + 
+                                  std::to_string(hitPos.y) + "," + std::to_string(hitPos.z) + 
+                                  ") UV(" + std::to_string(uv.x) + "," + std::to_string(uv.y) + ")\n").c_str()));
+                
+                // Проверяем обратное преобразование
+                float worldX = uv.x * (TilesX * TileSize);
+                float worldZ = (1.0f - uv.y) * (TilesY * TileSize);
+                OutputDebugStringA((std::string("UV->World check: (" + std::to_string(worldX) + "," + std::to_string(worldZ) + ")\n").c_str()));
+                
+                OutputDebugStringA("====================\n\n");
+            }
+            
+            ApplyCraterDeformation(uv);
+        }
+        else if (shouldDebug)
+        {
+            OutputDebugStringA("MISS\n====================\n\n");
+        }
     }
 
     mLastMousePos.x = x;
@@ -201,13 +283,17 @@ void TerrainApp::CreateRootSignature()
     CD3DX12_DESCRIPTOR_RANGE heightmapRange;
     heightmapRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
 
-    CD3DX12_DESCRIPTOR_RANGE colorRange;
-    colorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);
+    CD3DX12_DESCRIPTOR_RANGE craterMapRange;
+    craterMapRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);
 
-    CD3DX12_ROOT_PARAMETER rootParams[3];
+    CD3DX12_DESCRIPTOR_RANGE colorRange;
+    colorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2);
+
+    CD3DX12_ROOT_PARAMETER rootParams[4];
     rootParams[0].InitAsConstantBufferView(0);
     rootParams[1].InitAsDescriptorTable(1, &heightmapRange, D3D12_SHADER_VISIBILITY_ALL);
-    rootParams[2].InitAsDescriptorTable(1, &colorRange, D3D12_SHADER_VISIBILITY_PIXEL);
+    rootParams[2].InitAsDescriptorTable(1, &craterMapRange, D3D12_SHADER_VISIBILITY_ALL);
+    rootParams[3].InitAsDescriptorTable(1, &colorRange, D3D12_SHADER_VISIBILITY_PIXEL);
 
     CD3DX12_STATIC_SAMPLER_DESC samplerDesc(
         0,
@@ -216,7 +302,7 @@ void TerrainApp::CreateRootSignature()
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
 
-    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(3, rootParams, 1, &samplerDesc,
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(4, rootParams, 1, &samplerDesc,
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     ComPtr<ID3DBlob> serializedRootSig = nullptr;
@@ -252,6 +338,9 @@ void TerrainApp::CompileShaders()
     
     mShaders["terrainPS"] = d3dUtil::CompileShader(L"shaders/ps.hlsl", nullptr, "PS", "ps_5_0");
     OutputDebugStringW(L"PS compiled\n");
+
+    mShaders["craterCS"] = d3dUtil::CompileShader(L"shaders/CraterDeformation.hlsl", nullptr, "CS", "cs_5_0");
+    OutputDebugStringW(L"CS compiled\n");
 
     mInputLayout =
     {
@@ -364,7 +453,7 @@ void TerrainApp::GenerateTerrainMesh()
                 XMFLOAT3((boundsMax.x - boundsMin.x) * 0.5f, (boundsMax.y - boundsMin.y) * 0.5f, (boundsMax.z - boundsMin.z) * 0.5f)
             );
 
-            tile.ColorTextureIndex = 1 + tileY * TilesX + tileX;
+            tile.ColorTextureIndex = 2 + tileY * TilesX + tileX;
             tile.NormalTextureIndex = -1;
 
             OutputDebugStringA(("Tile (" + std::to_string(tileX) + "," + std::to_string(tileY) + ") -> texture index " + std::to_string(tile.ColorTextureIndex) + "\n").c_str());
@@ -398,10 +487,16 @@ void TerrainApp::GenerateTerrainMesh()
 void TerrainApp::SetupDescriptorHeaps()
 {
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-    srvHeapDesc.NumDescriptors = 1 + TilesX * TilesY;
+    srvHeapDesc.NumDescriptors = 2 + TilesX * TilesY;
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ThrowIfFailed(md3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
+
+    D3D12_DESCRIPTOR_HEAP_DESC uavHeapDesc = {};
+    uavHeapDesc.NumDescriptors = 1;
+    uavHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    uavHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ThrowIfFailed(md3dDevice->CreateDescriptorHeap(&uavHeapDesc, IID_PPV_ARGS(&mUavDescriptorHeap)));
 
     CD3DX12_CPU_DESCRIPTOR_HANDLE hDescriptor(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
@@ -409,15 +504,18 @@ void TerrainApp::SetupDescriptorHeaps()
     {
         auto& tex = mTextures[i];
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Format = tex->Resource->GetDesc().Format;
-        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Texture2D.MostDetailedMip = 0;
-        srvDesc.Texture2D.MipLevels = tex->Resource->GetDesc().MipLevels;
-        srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+        if (tex->Resource != nullptr)
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Format = tex->Resource->GetDesc().Format;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MostDetailedMip = 0;
+            srvDesc.Texture2D.MipLevels = tex->Resource->GetDesc().MipLevels;
+            srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
 
-        md3dDevice->CreateShaderResourceView(tex->Resource.Get(), &srvDesc, hDescriptor);
+            md3dDevice->CreateShaderResourceView(tex->Resource.Get(), &srvDesc, hDescriptor);
+        }
         hDescriptor.Offset(1, mCbvSrvUavDescriptorSize);
     }
 }
@@ -436,6 +534,156 @@ void TerrainApp::LoadTerrainTextures()
     mTextures.push_back(std::move(heightmapTex));
 
     OutputDebugStringW(L"Loaded global heightmap from Terrain/003/Height_Out.dds\n");
+
+    // Загружаем CPU копию heightmap для ray casting
+    {
+        // Открываем файл
+        std::ifstream file("Terrain/003/Height_Out.dds", std::ios::binary);
+        if (!file.is_open())
+        {
+            OutputDebugStringA("ERROR: Failed to open heightmap file for CPU copy\n");
+            return;
+        }
+
+        // Читаем magic number "DDS "
+        char magic[4];
+        file.read(magic, 4);
+        if (magic[0] != 'D' || magic[1] != 'D' || magic[2] != 'S' || magic[3] != ' ')
+        {
+            OutputDebugStringA("ERROR: Invalid DDS file format\n");
+            return;
+        }
+
+        // Читаем DDS_HEADER (124 байта)
+        struct DDS_HEADER
+        {
+            UINT dwSize;
+            UINT dwFlags;
+            UINT dwHeight;
+            UINT dwWidth;
+            UINT dwPitchOrLinearSize;
+            UINT dwDepth;
+            UINT dwMipMapCount;
+            UINT dwReserved1[11];
+            // DDS_PIXELFORMAT (32 байта)
+            struct {
+                UINT dwSize;
+                UINT dwFlags;
+                UINT dwFourCC;
+                UINT dwRGBBitCount;
+                UINT dwRBitMask;
+                UINT dwGBitMask;
+                UINT dwBBitMask;
+                UINT dwABitMask;
+            } ddspf;
+            UINT dwCaps;
+            UINT dwCaps2;
+            UINT dwCaps3;
+            UINT dwCaps4;
+            UINT dwReserved2;
+        };
+
+        DDS_HEADER header;
+        file.read(reinterpret_cast<char*>(&header), sizeof(DDS_HEADER));
+
+        mHeightmapWidth = header.dwWidth;
+        mHeightmapHeight = header.dwHeight;
+
+        OutputDebugStringA(("Heightmap dimensions: " + std::to_string(mHeightmapWidth) + 
+                           "x" + std::to_string(mHeightmapHeight) + "\n").c_str());
+        OutputDebugStringA(("FourCC: 0x" + std::to_string(header.ddspf.dwFourCC) + 
+                           ", RGBBitCount: " + std::to_string(header.ddspf.dwRGBBitCount) + "\n").c_str());
+
+        // Проверяем FourCC для DX10 формата
+        if (header.ddspf.dwFourCC == 0x30315844) // "DX10"
+        {
+            OutputDebugStringA("DX10 format detected, skipping extended header\n");
+            // Пропускаем DDS_HEADER_DXT10 (20 байт)
+            file.seekg(20, std::ios::cur);
+        }
+
+        // Определяем формат - пробуем R16_UNORM (2 байта на пиксель)
+        size_t pixelSize = 2; // R16_UNORM
+        if (header.ddspf.dwRGBBitCount == 32)
+        {
+            pixelSize = 4; // R32_FLOAT
+            OutputDebugStringA("Using R32_FLOAT format (4 bytes per pixel)\n");
+        }
+        else if (header.ddspf.dwRGBBitCount == 16)
+        {
+            pixelSize = 2; // R16_UNORM
+            OutputDebugStringA("Using R16_UNORM format (2 bytes per pixel)\n");
+        }
+        else
+        {
+            OutputDebugStringA(("Unknown format, defaulting to 2 bytes per pixel\n"));
+            pixelSize = 2;
+        }
+
+        // Читаем данные пикселей
+        size_t dataSize = mHeightmapWidth * mHeightmapHeight * pixelSize;
+        std::vector<uint8_t> rawData(dataSize);
+        file.read(reinterpret_cast<char*>(rawData.data()), dataSize);
+        
+        size_t bytesRead = file.gcount();
+        OutputDebugStringA(("Read " + std::to_string(bytesRead) + " bytes (expected " + std::to_string(dataSize) + ")\n").c_str());
+        
+        file.close();
+
+        // Конвертируем в float массив
+        mHeightmapData.resize(mHeightmapWidth * mHeightmapHeight);
+        
+        if (pixelSize == 2)
+        {
+            // R16_UNORM: конвертируем из uint16 [0, 65535] в float [0, 800]
+            const uint16_t* data16 = reinterpret_cast<const uint16_t*>(rawData.data());
+            for (size_t i = 0; i < mHeightmapData.size(); ++i)
+            {
+                // Нормализуем [0, 65535] -> [0, 1] -> [0, 800]
+                mHeightmapData[i] = (data16[i] / 65535.0f) * 800.0f;
+            }
+            OutputDebugStringA("Converted from R16_UNORM to float\n");
+        }
+        else
+        {
+            // R32_FLOAT: копируем напрямую
+            memcpy(mHeightmapData.data(), rawData.data(), dataSize);
+            OutputDebugStringA("Copied R32_FLOAT data directly\n");
+        }
+
+        // Отладка: выводим несколько значений высот
+        if (mHeightmapData.size() > 0)
+        {
+            float minH = mHeightmapData[0];
+            float maxH = mHeightmapData[0];
+            int validCount = 0;
+            for (float h : mHeightmapData)
+            {
+                if (!std::isnan(h) && !std::isinf(h))
+                {
+                    minH = (std::min)(minH, h);
+                    maxH = (std::max)(maxH, h);
+                    validCount++;
+                }
+            }
+            OutputDebugStringA(("Valid pixels: " + std::to_string(validCount) + " / " + std::to_string(mHeightmapData.size()) + "\n").c_str());
+            OutputDebugStringA(("Height range: " + std::to_string(minH) + 
+                               " to " + std::to_string(maxH) + "\n").c_str());
+            
+            // Выводим первые несколько значений
+            OutputDebugStringA("First 10 values: ");
+            for (int i = 0; i < 10 && i < (int)mHeightmapData.size(); ++i)
+            {
+                OutputDebugStringA((std::to_string(mHeightmapData[i]) + " ").c_str());
+            }
+            OutputDebugStringA("\n");
+        }
+    }
+
+    auto craterTex = std::make_unique<Texture>();
+    craterTex->Name = "cratermap";
+    mCraterMapSrvIndex = 1;
+    mTextures.push_back(std::move(craterTex));
 
     for (int y = 0; y < TilesY; y++)
     {
@@ -567,4 +815,303 @@ BoundingFrustum TerrainApp::BuildFrustum() const
     XMMATRIX invView = XMMatrixInverse(nullptr, view);
     frustum.Transform(frustum, invView);
     return frustum;
+}
+
+void TerrainApp::CreateComputeRootSignature()
+{
+    CD3DX12_DESCRIPTOR_RANGE uavRange;
+    uavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+
+    CD3DX12_ROOT_PARAMETER rootParams[2];
+    rootParams[0].InitAsConstantBufferView(0);
+    rootParams[1].InitAsDescriptorTable(1, &uavRange);
+
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(2, rootParams, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+
+    ComPtr<ID3DBlob> serializedRootSig = nullptr;
+    ComPtr<ID3DBlob> errorBlob = nullptr;
+    HRESULT hr = D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+        serializedRootSig.GetAddressOf(), errorBlob.GetAddressOf());
+
+    if (errorBlob != nullptr)
+    {
+        OutputDebugStringA((char*)errorBlob->GetBufferPointer());
+    }
+    ThrowIfFailed(hr);
+
+    ThrowIfFailed(md3dDevice->CreateRootSignature(
+        0,
+        serializedRootSig->GetBufferPointer(),
+        serializedRootSig->GetBufferSize(),
+        IID_PPV_ARGS(mComputeRootSignature.GetAddressOf())));
+}
+
+void TerrainApp::CreateComputePipelineState()
+{
+    D3D12_COMPUTE_PIPELINE_STATE_DESC computePsoDesc = {};
+    computePsoDesc.pRootSignature = mComputeRootSignature.Get();
+    computePsoDesc.CS = { mShaders["craterCS"]->GetBufferPointer(), mShaders["craterCS"]->GetBufferSize() };
+    computePsoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+
+    ThrowIfFailed(md3dDevice->CreateComputePipelineState(&computePsoDesc, IID_PPV_ARGS(&mPSOs["crater"])));
+}
+
+void TerrainApp::InitializeCraterMap()
+{
+    D3D12_RESOURCE_DESC texDesc = {};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Alignment = 0;
+    texDesc.Width = mCraterMapWidth;
+    texDesc.Height = mCraterMapHeight;
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels = 1;
+    texDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.SampleDesc.Quality = 0;
+    texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    ThrowIfFailed(md3dDevice->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &texDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        nullptr,
+        IID_PPV_ARGS(&mCraterMap)));
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    srvDesc.Texture2D.MipLevels = 1;
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    srvHandle.Offset(mCraterMapSrvIndex, mCbvSrvUavDescriptorSize);
+    md3dDevice->CreateShaderResourceView(mCraterMap.Get(), &srvDesc, srvHandle);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+    uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    uavDesc.Texture2D.MipSlice = 0;
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE uavHandle(mUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    md3dDevice->CreateUnorderedAccessView(mCraterMap.Get(), nullptr, &uavDesc, uavHandle);
+
+    FLOAT clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    CD3DX12_GPU_DESCRIPTOR_HANDLE uavGpuHandle(mUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    mCommandList->ClearUnorderedAccessViewFloat(uavGpuHandle, uavHandle, mCraterMap.Get(), clearColor, 0, nullptr);
+
+    // Transition to pixel shader resource state for rendering
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mCraterMap.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
+
+    mTextures[mCraterMapSrvIndex]->Resource = mCraterMap;
+    
+    OutputDebugStringA("Crater map initialized and transitioned to SRV state\n");
+}
+
+void TerrainApp::ApplyCraterDeformation(const XMFLOAT2& uv)
+{
+    ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), mPSOs["crater"].Get()));
+
+    // Transition crater map to UAV state
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mCraterMap.Get(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+
+    CraterParams params;
+    params.CenterUV = uv;
+    params.RadiusUV = mCraterRadius;
+    params.Depth = mCraterDepth;
+    mCraterParamsCB->CopyData(0, params);
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = { mUavDescriptorHeap.Get() };
+    mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+
+    mCommandList->SetComputeRootSignature(mComputeRootSignature.Get());
+    mCommandList->SetComputeRootConstantBufferView(0, mCraterParamsCB->Resource()->GetGPUVirtualAddress());
+
+    CD3DX12_GPU_DESCRIPTOR_HANDLE uavHandle(mUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    mCommandList->SetComputeRootDescriptorTable(1, uavHandle);
+
+    UINT numGroupsX = (mCraterMapWidth + 7) / 8;
+    UINT numGroupsY = (mCraterMapHeight + 7) / 8;
+    mCommandList->Dispatch(numGroupsX, numGroupsY, 1);
+
+    // Transition back to SRV state
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(
+        mCraterMap.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
+
+    ThrowIfFailed(mCommandList->Close());
+    ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
+    mCommandQueue->ExecuteCommandLists(_countof(cmdsLists), cmdsLists);
+    FlushCommandQueue();
+}
+
+bool TerrainApp::RayTerrainIntersection(const XMFLOAT3& rayOrigin, const XMFLOAT3& rayDir, XMFLOAT3& hitPos)
+{
+    float terrainSize = (float)(TilesX * TileSize);
+    float terrainMinX = 0.0f;
+    float terrainMinZ = 0.0f;
+    float terrainMaxX = terrainSize;
+    float terrainMaxZ = terrainSize;
+
+    // Проверяем что луч имеет ненулевую вертикальную компоненту
+    if (fabs(rayDir.y) < 0.0001f)
+    {
+        return false;
+    }
+    
+    // Если heightmap не загружена, используем простую аппроксимацию
+    if (mHeightmapData.empty())
+    {
+        // Простое пересечение с плоскостью Y=350
+        float t = (350.0f - rayOrigin.y) / rayDir.y;
+        if (t < 0.0f)
+            return false;
+            
+        XMVECTOR rayOriginVec = XMLoadFloat3(&rayOrigin);
+        XMVECTOR rayDirVec = XMLoadFloat3(&rayDir);
+        XMVECTOR point = rayOriginVec + t * rayDirVec;
+        XMStoreFloat3(&hitPos, point);
+        
+        // Проверяем границы
+        if (hitPos.x < terrainMinX || hitPos.x > terrainMaxX ||
+            hitPos.z < terrainMinZ || hitPos.z > terrainMaxZ)
+        {
+            return false;
+        }
+        
+        hitPos.y = 350.0f;
+        return true;
+    }
+    
+    // Используем итеративный метод с реальной heightmap
+    // Начинаем с пересечения с плоскостью на средней высоте террейна
+    float startHeight = 400.0f; // Средняя высота террейна
+    float t = (startHeight - rayOrigin.y) / rayDir.y;
+    
+    // Если t отрицательное, пробуем с другой высотой
+    if (t < 0.0f)
+    {
+        // Пробуем с минимальной высотой
+        startHeight = 0.0f;
+        t = (startHeight - rayOrigin.y) / rayDir.y;
+        if (t < 0.0f)
+        {
+            // Пробуем с максимальной высотой
+            startHeight = 800.0f;
+            t = (startHeight - rayOrigin.y) / rayDir.y;
+            if (t < 0.0f)
+                return false;
+        }
+    }
+    
+    XMVECTOR rayOriginVec = XMLoadFloat3(&rayOrigin);
+    XMVECTOR rayDirVec = XMLoadFloat3(&rayDir);
+    XMVECTOR intersection = rayOriginVec + t * rayDirVec;
+    
+    XMFLOAT3 intersectionPos;
+    XMStoreFloat3(&intersectionPos, intersection);
+    
+    // Проверяем границы
+    if (intersectionPos.x < terrainMinX || intersectionPos.x > terrainMaxX ||
+        intersectionPos.z < terrainMinZ || intersectionPos.z > terrainMaxZ)
+    {
+        return false;
+    }
+    
+    // Итеративное уточнение (15 итераций для лучшей точности)
+    for (int i = 0; i < 15; ++i)
+    {
+        XMFLOAT2 uv = WorldToUV(intersectionPos);
+        float actualHeight = SampleHeightmap(uv.x, uv.y);
+        
+        // Вычисляем новое t чтобы достичь реальной высоты
+        t = (actualHeight - rayOrigin.y) / rayDir.y;
+        if (t < 0.0f)
+            return false;
+        
+        intersection = rayOriginVec + t * rayDirVec;
+        XMStoreFloat3(&intersectionPos, intersection);
+        
+        // Проверяем границы после уточнения
+        if (intersectionPos.x < terrainMinX || intersectionPos.x > terrainMaxX ||
+            intersectionPos.z < terrainMinZ || intersectionPos.z > terrainMaxZ)
+        {
+            return false;
+        }
+        
+        // Если достаточно близко к поверхности, считаем что попали
+        float heightDiff = fabs(intersectionPos.y - actualHeight);
+        if (heightDiff < 1.0f)
+        {
+            hitPos = intersectionPos;
+            hitPos.y = actualHeight;
+            return true;
+        }
+    }
+    
+    // Даже если не сошлось идеально, возвращаем последнюю позицию
+    hitPos = intersectionPos;
+    return true;
+}
+
+XMFLOAT2 TerrainApp::WorldToUV(const XMFLOAT3& worldPos)
+{
+    float terrainSize = (float)(TilesX * TileSize);
+    XMFLOAT2 uv;
+    uv.x = worldPos.x / terrainSize;
+    uv.y = 1.0f - (worldPos.z / terrainSize);  // Инвертируем V, как в генерации вершин
+    uv.x = (std::max)(0.0f, (std::min)(uv.x, 1.0f));
+    uv.y = (std::max)(0.0f, (std::min)(uv.y, 1.0f));
+    return uv;
+}
+
+float TerrainApp::SampleHeightmap(float u, float v)
+{
+    // Если heightmap не загружена, возвращаем 0
+    if (mHeightmapData.empty() || mHeightmapWidth == 0 || mHeightmapHeight == 0)
+    {
+        return 0.0f;
+    }
+
+    // Clamp UV координаты
+    u = (std::max)(0.0f, (std::min)(u, 1.0f));
+    v = (std::max)(0.0f, (std::min)(v, 1.0f));
+
+    // Конвертируем UV в пиксельные координаты
+    float fx = u * (mHeightmapWidth - 1);
+    float fy = v * (mHeightmapHeight - 1);
+
+    // Билинейная интерполяция
+    int x0 = (int)fx;
+    int y0 = (int)fy;
+    int x1 = (std::min)(x0 + 1, (int)mHeightmapWidth - 1);
+    int y1 = (std::min)(y0 + 1, (int)mHeightmapHeight - 1);
+
+    float tx = fx - x0;
+    float ty = fy - y0;
+
+    // Получаем 4 значения высоты
+    float h00 = mHeightmapData[y0 * mHeightmapWidth + x0];
+    float h10 = mHeightmapData[y0 * mHeightmapWidth + x1];
+    float h01 = mHeightmapData[y1 * mHeightmapWidth + x0];
+    float h11 = mHeightmapData[y1 * mHeightmapWidth + x1];
+
+    // Билинейная интерполяция
+    float h0 = h00 * (1.0f - tx) + h10 * tx;
+    float h1 = h01 * (1.0f - tx) + h11 * tx;
+    float height = h0 * (1.0f - ty) + h1 * ty;
+
+    return height;
 }

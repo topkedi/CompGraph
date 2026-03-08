@@ -17,6 +17,7 @@ cbuffer PassConstants : register(b0)
 };
 
 Texture2D heightMap : register(t0);
+Texture2D craterMap : register(t1);
 SamplerState heightSampler : register(s0);
 
 [domain("quad")]
@@ -40,14 +41,15 @@ PixelIn DS(PatchTess patchTess, float2 uv : SV_DomainLocation, const OutputPatch
     uv.y);
 
   float heightValue = heightMap.SampleLevel(heightSampler, pout.texCoord, 0).r;
-  pout.positionWorld.y = heightValue * gHeightScale;
+  float craterValue = craterMap.SampleLevel(heightSampler, pout.texCoord, 0).r;
+  pout.positionWorld.y = (heightValue + craterValue) * gHeightScale;
 
   float texelSize = 1.0f / 2048.0f;
   
-  float hL = heightMap.SampleLevel(heightSampler, pout.texCoord + float2(-texelSize, 0), 0).r * gHeightScale;
-  float hR = heightMap.SampleLevel(heightSampler, pout.texCoord + float2(texelSize, 0), 0).r * gHeightScale;
-  float hD = heightMap.SampleLevel(heightSampler, pout.texCoord + float2(0, texelSize), 0).r * gHeightScale;
-  float hU = heightMap.SampleLevel(heightSampler, pout.texCoord + float2(0, -texelSize), 0).r * gHeightScale;
+  float hL = (heightMap.SampleLevel(heightSampler, pout.texCoord + float2(-texelSize, 0), 0).r + craterMap.SampleLevel(heightSampler, pout.texCoord + float2(-texelSize, 0), 0).r) * gHeightScale;
+  float hR = (heightMap.SampleLevel(heightSampler, pout.texCoord + float2(texelSize, 0), 0).r + craterMap.SampleLevel(heightSampler, pout.texCoord + float2(texelSize, 0), 0).r) * gHeightScale;
+  float hD = (heightMap.SampleLevel(heightSampler, pout.texCoord + float2(0, texelSize), 0).r + craterMap.SampleLevel(heightSampler, pout.texCoord + float2(0, texelSize), 0).r) * gHeightScale;
+  float hU = (heightMap.SampleLevel(heightSampler, pout.texCoord + float2(0, -texelSize), 0).r + craterMap.SampleLevel(heightSampler, pout.texCoord + float2(0, -texelSize), 0).r) * gHeightScale;
   
   float3 tangent = normalize(float3(2.0f * texelSize * 2048.0f, hR - hL, 0));
   float3 bitangent = normalize(float3(0, hU - hD, 2.0f * texelSize * 2048.0f));
