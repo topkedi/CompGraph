@@ -118,8 +118,8 @@ XMFLOAT2 TemporalAA::GetJitter(int frameIndex)
     
     int index = frameIndex % 8;
     
-    // Normal scale for production use
-    float scale = 1.0f;
+    // Увеличен scale в 2 раза (0.2 -> 0.4)
+    float scale = 0.4f;
     return XMFLOAT2(
         (haltonSequence[index].x - 0.5f) * scale,
         (haltonSequence[index].y - 0.5f) * scale

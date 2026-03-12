@@ -37,27 +37,27 @@ void Camera::SetPosition(float x, float y, float z)
   UpdateViewMatrix();
 }
 
-void Camera::MoveForward()
+void Camera::MoveForward(bool fast)
 {
-  float forwardSpeed = 10.0f; // Increased speed
+  float forwardSpeed = fast ? 30.0f : 10.0f; // 3x speed when fast
 
   XMStoreFloat3(&m_position, XMVector3Transform(XMLoadFloat3(&m_position), XMMatrixTranslation(m_forwardVector.x * forwardSpeed, m_forwardVector.y * forwardSpeed, m_forwardVector.z * forwardSpeed)));
 
   UpdateViewMatrix();
 }
 
-void Camera::MoveBackward()
+void Camera::MoveBackward(bool fast)
 {
-  float forwardSpeed = 10.0f; // Increased speed
+  float forwardSpeed = fast ? 30.0f : 10.0f; // 3x speed when fast
 
   XMStoreFloat3(&m_position, XMVector3Transform(XMLoadFloat3(&m_position), XMMatrixTranslation(-m_forwardVector.x * forwardSpeed, -m_forwardVector.y * forwardSpeed, -m_forwardVector.z * forwardSpeed)));
 
   UpdateViewMatrix();
 }
 
-void Camera::MoveLeft()
+void Camera::MoveLeft(bool fast)
 {
-  float strafeSpeed = 10.0f;
+  float strafeSpeed = fast ? 30.0f : 10.0f; // 3x speed when fast
 
   float pitch = XMConvertToRadians(m_rotation.x);
   float yaw = XMConvertToRadians(m_rotation.y);
@@ -73,9 +73,9 @@ void Camera::MoveLeft()
   UpdateViewMatrix();
 }
 
-void Camera::MoveRight()
+void Camera::MoveRight(bool fast)
 {
-  float strafeSpeed = 10.0f;
+  float strafeSpeed = fast ? 30.0f : 10.0f; // 3x speed when fast
 
   float pitch = XMConvertToRadians(m_rotation.x);
   float yaw = XMConvertToRadians(m_rotation.y);
@@ -91,16 +91,16 @@ void Camera::MoveRight()
   UpdateViewMatrix();
 }
 
-void Camera::MoveUp()
+void Camera::MoveUp(bool fast)
 {
-  float verticalSpeed = 10.0f;
+  float verticalSpeed = fast ? 30.0f : 10.0f; // 3x speed when fast
   m_position.y += verticalSpeed;
   UpdateViewMatrix();
 }
 
-void Camera::MoveDown()
+void Camera::MoveDown(bool fast)
 {
-  float verticalSpeed = 10.0f;
+  float verticalSpeed = fast ? 30.0f : 10.0f; // 3x speed when fast
   m_position.y -= verticalSpeed;
   UpdateViewMatrix();
 }

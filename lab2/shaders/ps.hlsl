@@ -3,8 +3,10 @@
 Texture2D colorTexture : register(t1);  // Color texture at t1 (heightmap is at t0)
 SamplerState samplerState : register(s0);
 
-float4 PS(PixelIn input) : SV_TARGET
+PixelOut PS(PixelIn input)
 {
+  PixelOut output;
+  
   // Sample terrain color from texture
   float4 baseColor = colorTexture.Sample(samplerState, input.localTexCoord);
   
@@ -30,8 +32,22 @@ float4 PS(PixelIn input) : SV_TARGET
   float totalLight = ambientStrength + diffuseStrength * 0.55f;
   
   // Apply lighting to terrain color
-  float4 outputColor = baseColor * totalLight;
-  outputColor.a = 1.0f;
+  output.color = baseColor * totalLight;
+  output.color.a = 1.0f;
   
-  return outputColor;
+  // Вычисление motion vectors
+  // Преобразование из homogeneous coordinates в NDC
+  float2 currentNDC = input.currentPos.xy / input.currentPos.w;
+  float2 prevNDC = input.prevPos.xy / input.prevPos.w;
+  
+  // Motion vector в NDC пространстве
+  float2 motionNDC = currentNDC - prevNDC;
+  
+  // Преобразование из NDC [-1,1] в UV [0,1] пространство
+  // NDC: X[-1,1], Y[-1,1] -> UV: X[0,1], Y[0,1]
+  // Учитываем, что Y инвертирован в UV пространстве
+  output.motion.x = motionNDC.x * 0.5;      // X: [-1,1] -> [-0.5,0.5]
+  output.motion.y = -motionNDC.y * 0.5;     // Y: [-1,1] -> [0.5,-0.5] (инвертируем)
+  
+  return output;
 }

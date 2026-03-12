@@ -32,16 +32,26 @@ bool TerrainApp::Initialize()
     mCamera.SetPosition(475.0f, 600.0f, 75.0f);
     mCamera.SetProjectionValues(50.0f, AspectRatio(), 1.0f, 10000.0f);
 
+    // Инициализируем предыдущую матрицу текущей
+    XMMATRIX view = mCamera.GetViewMatrix();
+    XMMATRIX proj = mCamera.GetProjectionMatrix();
+    XMMATRIX viewProj = XMMatrixMultiply(view, proj);
+    XMStoreFloat4x4(&mPrevViewProj, viewProj);
+
     mTemporalAA = std::make_unique<TemporalAA>(md3dDevice.Get(), mClientWidth, mClientHeight, mBackBufferFormat);
 
     LoadTerrainTextures();
     CreateRootSignature();
     CreateTAARootSignature();
+    CreateMotionVectorRootSignature();
     CompileShaders();
     GenerateTerrainMesh();
     SetupDescriptorHeaps();
     CreatePipelineState();
     CreateTAAPipelineState();
+    CreateMotionVectorPipelineState();
+    CreateVelocityDebugPipelineState();
+    CreateObjectPipelineState();
 
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
@@ -51,6 +61,7 @@ bool TerrainApp::Initialize()
 
     mPassCB = std::make_unique<UploadBuffer<PassConstants>>(md3dDevice.Get(), 1, true);
     mTAACB = std::make_unique<UploadBuffer<TAAConstants>>(md3dDevice.Get(), 1, true);
+    mObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(md3dDevice.Get(), 1, true);
 
     std::vector<float> lodDistances = { 300.0f, 900.0f, 1500.0f };
     float terrainSize = (float)(TilesX * TileSize);
@@ -59,6 +70,10 @@ bool TerrainApp::Initialize()
     
     OutputDebugStringA(("QuadTree initialized: size=" + std::to_string(terrainSize) + 
                         ", maxDepth=" + std::to_string(maxDepth) + "\n").c_str());
+
+    OutputDebugStringA("Controls: T - Toggle TAA, M - Toggle Motion Vector Visualization, V - Toggle Velocity Debug\n");
+    OutputDebugStringA("Movement: WASD + QE, Hold SHIFT for 3x speed\n");
+    OutputDebugStringA("Camera motion will generate velocity for TAA\n");
 
     return true;
 }
@@ -73,8 +88,13 @@ void TerrainApp::OnResize()
         mTemporalAA->OnResize(mClientWidth, mClientHeight);
     }
 
+    // Пересоздаем буферы при изменении размера
     if (mTemporalAA != nullptr && !mTextures.empty())
     {
+        // Освобождаем старые буферы
+        mSceneColorBuffer.Reset();
+        mMotionVectorBuffer.Reset();
+        
         SetupDescriptorHeaps();
     }
 }
@@ -99,21 +119,84 @@ void TerrainApp::Draw(const GameTimer& gt)
         // Render scene to texture
         DrawSceneToTexture();
         
-        // Apply TAA
-        ResolveTAA();
+        if (mShowMotionVectors)
+        {
+            // Показать motion vectors вместо TAA результата
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
 
-        // Copy TAA output to backbuffer
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
-            D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST));
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mTemporalAA->Resource(),
-            D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_COPY_SOURCE));
+            float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+            mCommandList->ClearRenderTargetView(CurrentBackBufferView(), clearColor, 0, nullptr);
+            mCommandList->OMSetRenderTargets(1, &CurrentBackBufferView(), true, nullptr);
 
-        mCommandList->CopyResource(CurrentBackBuffer(), mTemporalAA->Resource());
+            ID3D12DescriptorHeap* descriptorHeaps[] = { mSrvDescriptorHeap.Get() };
+            mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
 
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mTemporalAA->Resource(),
-            D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_GENERIC_READ));
-        mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
-            D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT));
+            mCommandList->SetGraphicsRootSignature(mMotionVectorRootSignature.Get());
+            mCommandList->SetPipelineState(mPSOs["motionVisualize"].Get());
+
+            CD3DX12_GPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+            srvHandle.Offset(mMotionVectorSrvIndex, mCbvSrvUavDescriptorSize);
+            mCommandList->SetGraphicsRootDescriptorTable(0, srvHandle);
+
+            mCommandList->IASetVertexBuffers(0, 0, nullptr);
+            mCommandList->IASetIndexBuffer(nullptr);
+            mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            mCommandList->DrawInstanced(3, 1, 0, 0);
+
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
+        }
+        else if (mShowVelocityDebug)
+        {
+            // Показать velocity debug (красный оверлей на движущихся пикселях)
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
+
+            mCommandList->OMSetRenderTargets(1, &CurrentBackBufferView(), true, nullptr);
+
+            ID3D12DescriptorHeap* descriptorHeaps[] = { mSrvDescriptorHeap.Get() };
+            mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+
+            mCommandList->SetGraphicsRootSignature(mMotionVectorRootSignature.Get());
+            mCommandList->SetPipelineState(mPSOs["velocityDebug"].Get());
+
+            // t0 - Motion vector buffer
+            CD3DX12_GPU_DESCRIPTOR_HANDLE motionHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+            motionHandle.Offset(mMotionVectorSrvIndex, mCbvSrvUavDescriptorSize);
+            mCommandList->SetGraphicsRootDescriptorTable(0, motionHandle);
+
+            // t1 - Scene color buffer
+            CD3DX12_GPU_DESCRIPTOR_HANDLE sceneHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+            sceneHandle.Offset(mSceneColorSrvIndex, mCbvSrvUavDescriptorSize);
+            mCommandList->SetGraphicsRootDescriptorTable(1, sceneHandle);
+
+            mCommandList->IASetVertexBuffers(0, 0, nullptr);
+            mCommandList->IASetIndexBuffer(nullptr);
+            mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            mCommandList->DrawInstanced(3, 1, 0, 0);
+
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
+        }
+        else
+        {
+            // Apply TAA
+            ResolveTAA();
+
+            // Copy TAA output to backbuffer
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST));
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mTemporalAA->Resource(),
+                D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_COPY_SOURCE));
+
+            mCommandList->CopyResource(CurrentBackBuffer(), mTemporalAA->Resource());
+
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mTemporalAA->Resource(),
+                D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_GENERIC_READ));
+            mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(),
+                D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT));
+        }
 
         mFrameIndex++;
     }
@@ -136,11 +219,20 @@ void TerrainApp::Draw(const GameTimer& gt)
 
         CD3DX12_GPU_DESCRIPTOR_HANDLE heightmapHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
         heightmapHandle.Offset(mHeightmapSrvIndex, mCbvSrvUavDescriptorSize);
-        mCommandList->SetGraphicsRootDescriptorTable(1, heightmapHandle);
+        mCommandList->SetGraphicsRootDescriptorTable(2, heightmapHandle);
 
+        // Рендеринг ландшафта
+        mCommandList->SetPipelineState(mPSOs["terrainSimple"].Get());
         mCommandList->IASetVertexBuffers(0, 1, &mTerrainVBV);
         mCommandList->IASetIndexBuffer(&mTerrainIBV);
         mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+
+        // Пустой ObjectConstants для совместимости
+        ObjectConstants emptyObjConstants;
+        emptyObjConstants.World = MathHelper::Identity4x4();
+        emptyObjConstants.PrevWorld = MathHelper::Identity4x4();
+        mObjectCB->CopyData(0, emptyObjConstants);
+        mCommandList->SetGraphicsRootConstantBufferView(1, mObjectCB->Resource()->GetGPUVirtualAddress());
 
         for (auto* tile : mVisibleTiles)
         {
@@ -149,7 +241,7 @@ void TerrainApp::Draw(const GameTimer& gt)
             {
                 CD3DX12_GPU_DESCRIPTOR_HANDLE colorHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
                 colorHandle.Offset(texIndex, mCbvSrvUavDescriptorSize);
-                mCommandList->SetGraphicsRootDescriptorTable(2, colorHandle);
+                mCommandList->SetGraphicsRootDescriptorTable(3, colorHandle);
             }
 
             mCommandList->DrawIndexedInstanced(tile->IndexCount, 1, tile->IndexOffset, tile->VertexOffset, 0);
@@ -199,25 +291,28 @@ void TerrainApp::OnMouseMove(WPARAM btnState, int x, int y)
 
 void TerrainApp::OnKeyPressed(const GameTimer& gt, WPARAM key)
 {
+    // Проверяем, зажат ли Shift для ускоренного движения
+    bool fastMode = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    
     switch (key)
     {
     case 'W':
-        mCamera.MoveForward();
+        mCamera.MoveForward(fastMode);
         break;
     case 'S':
-        mCamera.MoveBackward();
+        mCamera.MoveBackward(fastMode);
         break;
     case 'A':
-        mCamera.MoveLeft();
+        mCamera.MoveLeft(fastMode);
         break;
     case 'D':
-        mCamera.MoveRight();
+        mCamera.MoveRight(fastMode);
         break;
     case 'Q':
-        mCamera.MoveUp();
+        mCamera.MoveUp(fastMode);
         break;
     case 'E':
-        mCamera.MoveDown();
+        mCamera.MoveDown(fastMode);
         break;
     case 'R':
         mCamera.TurnUp();
@@ -239,6 +334,32 @@ void TerrainApp::OnKeyPressed(const GameTimer& gt, WPARAM key)
             OutputDebugStringA("TAA Disabled\n");
         }
         break;
+    case 'M':
+        // Переключение режима отображения motion vectors (для отладки)
+        mShowMotionVectors = !mShowMotionVectors;
+        if (mShowMotionVectors)
+        {
+            mShowVelocityDebug = false;  // Выключаем velocity debug
+            OutputDebugStringA("Motion Vector visualization ON\n");
+        }
+        else
+        {
+            OutputDebugStringA("Motion Vector visualization OFF\n");
+        }
+        break;
+    case 'V':
+        // Переключение velocity debug (красный оверлей на движущихся пикселях)
+        mShowVelocityDebug = !mShowVelocityDebug;
+        if (mShowVelocityDebug)
+        {
+            mShowMotionVectors = false;  // Выключаем motion vector visualization
+            OutputDebugStringA("Velocity Debug ON (red overlay on moving pixels)\n");
+        }
+        else
+        {
+            OutputDebugStringA("Velocity Debug OFF\n");
+        }
+        break;
     }
 }
 
@@ -250,10 +371,11 @@ void TerrainApp::CreateRootSignature()
     CD3DX12_DESCRIPTOR_RANGE colorRange;
     colorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);
 
-    CD3DX12_ROOT_PARAMETER rootParams[3];
-    rootParams[0].InitAsConstantBufferView(0);
-    rootParams[1].InitAsDescriptorTable(1, &heightmapRange, D3D12_SHADER_VISIBILITY_ALL);
-    rootParams[2].InitAsDescriptorTable(1, &colorRange, D3D12_SHADER_VISIBILITY_PIXEL);
+    CD3DX12_ROOT_PARAMETER rootParams[4];
+    rootParams[0].InitAsConstantBufferView(0);  // PassConstants
+    rootParams[1].InitAsConstantBufferView(1);  // ObjectConstants (для куба)
+    rootParams[2].InitAsDescriptorTable(1, &heightmapRange, D3D12_SHADER_VISIBILITY_ALL);
+    rootParams[3].InitAsDescriptorTable(1, &colorRange, D3D12_SHADER_VISIBILITY_PIXEL);
 
     CD3DX12_STATIC_SAMPLER_DESC samplerDesc(
         0,
@@ -262,7 +384,7 @@ void TerrainApp::CreateRootSignature()
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
 
-    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(3, rootParams, 1, &samplerDesc,
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(4, rootParams, 1, &samplerDesc,
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     ComPtr<ID3DBlob> serializedRootSig = nullptr;
@@ -299,6 +421,22 @@ void TerrainApp::CompileShaders()
     mShaders["terrainPS"] = d3dUtil::CompileShader(L"shaders/ps.hlsl", nullptr, "PS", "ps_5_0");
     OutputDebugStringW(L"PS compiled\n");
 
+    // TAA шейдеры
+    mShaders["taaVS"] = d3dUtil::CompileShader(L"shaders/TAAResolve.hlsl", nullptr, "VS", "vs_5_0");
+    mShaders["taaPS"] = d3dUtil::CompileShader(L"shaders/TAAResolve.hlsl", nullptr, "PS", "ps_5_0");
+    
+    // Motion Vector визуализация шейдеры
+    mShaders["motionVS"] = d3dUtil::CompileShader(L"shaders/MotionVectorVisualize.hlsl", nullptr, "VS", "vs_5_0");
+    mShaders["motionPS"] = d3dUtil::CompileShader(L"shaders/MotionVectorVisualize.hlsl", nullptr, "PS", "ps_5_0");
+    
+    // Velocity Debug шейдеры (красный оверлей)
+    mShaders["velocityDebugVS"] = d3dUtil::CompileShader(L"shaders/VelocityDebug.hlsl", nullptr, "VS", "vs_5_0");
+    mShaders["velocityDebugPS"] = d3dUtil::CompileShader(L"shaders/VelocityDebug.hlsl", nullptr, "PS", "ps_5_0");
+    
+    // Объектные шейдеры
+    mShaders["objectVS"] = d3dUtil::CompileShader(L"shaders/object_vs.hlsl", nullptr, "VS", "vs_5_0");
+    // Используем тот же пиксельный шейдер что и для ландшафта
+
     mInputLayout =
     {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -311,6 +449,7 @@ void TerrainApp::CompileShaders()
 
 void TerrainApp::CreatePipelineState()
 {
+    // PSO для ландшафта (с ObjectConstants для совместимости)
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
     psoDesc.pRootSignature = mRootSignature.Get();
@@ -324,13 +463,19 @@ void TerrainApp::CreatePipelineState()
     psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
-    psoDesc.NumRenderTargets = 1;
+    psoDesc.NumRenderTargets = 2;  // Color + Motion Vectors для TAA режима
     psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16_FLOAT;  // Motion vectors
     psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
     psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
     psoDesc.DSVFormat = mDepthStencilFormat;
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSOs["terrain"])));
+    
+    // PSO для обычного рендеринга (без motion vectors)
+    psoDesc.NumRenderTargets = 1;  // Только Color
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_UNKNOWN;  // Очищаем второй render target
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSOs["terrainSimple"])));
 }
 
 void TerrainApp::GenerateTerrainMesh()
@@ -444,7 +589,7 @@ void TerrainApp::GenerateTerrainMesh()
 void TerrainApp::SetupDescriptorHeaps()
 {
     UINT numTextures = 1 + TilesX * TilesY;
-    UINT numTAADescriptors = 4;
+    UINT numTAADescriptors = 6;  // SceneColor, MotionVector, TAAOutput, TAAHistory (SRV + RTV)
     
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
     srvHeapDesc.NumDescriptors = numTextures + numTAADescriptors;
@@ -453,7 +598,7 @@ void TerrainApp::SetupDescriptorHeaps()
     ThrowIfFailed(md3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
 
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
-    rtvHeapDesc.NumDescriptors = 4;
+    rtvHeapDesc.NumDescriptors = 6;  // SceneColor, MotionVector, TAAOutput, TAAHistory
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ThrowIfFailed(md3dDevice->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mRtvHeap)));
@@ -476,6 +621,7 @@ void TerrainApp::SetupDescriptorHeaps()
         hDescriptor.Offset(1, mCbvSrvUavDescriptorSize);
     }
 
+    // Создание буфера для scene color
     D3D12_RESOURCE_DESC texDesc;
     ZeroMemory(&texDesc, sizeof(D3D12_RESOURCE_DESC));
     texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -501,14 +647,38 @@ void TerrainApp::SetupDescriptorHeaps()
         &optClear,
         IID_PPV_ARGS(&mSceneColorBuffer)));
 
+    // Именуем ресурс для отладки в RenderDoc
+    mSceneColorBuffer->SetName(L"Scene Color Buffer");
+
+    // Создание буфера для motion vectors (RG16F формат для X,Y компонент)
+    texDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+    float motionClearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    CD3DX12_CLEAR_VALUE motionClear(DXGI_FORMAT_R16G16_FLOAT, motionClearColor);
+
+    ThrowIfFailed(md3dDevice->CreateCommittedResource(
+        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+        D3D12_HEAP_FLAG_NONE,
+        &texDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        &motionClear,
+        IID_PPV_ARGS(&mMotionVectorBuffer)));
+
+    // Именуем ресурс для отладки в RenderDoc
+    mMotionVectorBuffer->SetName(L"Velocity Texture");
+    
+    OutputDebugStringA("Velocity Texture created: DXGI_FORMAT_R16G16_FLOAT\n");
+
     mSceneColorSrvIndex = numTextures;
-    mTAAOutputSrvIndex = numTextures + 1;
-    mTAAHistorySrvIndex = numTextures + 2;
+    mMotionVectorSrvIndex = numTextures + 1;
+    mTAAOutputSrvIndex = numTextures + 2;
+    mTAAHistorySrvIndex = numTextures + 3;
 
     mSceneColorRtvIndex = 0;
-    mTAAOutputRtvIndex = 1;
-    mTAAHistoryRtvIndex = 2;
+    mMotionVectorRtvIndex = 1;
+    mTAAOutputRtvIndex = 2;
+    mTAAHistoryRtvIndex = 3;
 
+    // SRV для SceneColor
     CD3DX12_CPU_DESCRIPTOR_HANDLE srvCpuHandle(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
     srvCpuHandle.Offset(mSceneColorSrvIndex, mCbvSrvUavDescriptorSize);
     CD3DX12_GPU_DESCRIPTOR_HANDLE srvGpuHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
@@ -522,6 +692,7 @@ void TerrainApp::SetupDescriptorHeaps()
     srvDesc.Texture2D.MipLevels = 1;
     md3dDevice->CreateShaderResourceView(mSceneColorBuffer.Get(), &srvDesc, srvCpuHandle);
 
+    // RTV для SceneColor
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvCpuHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
     rtvCpuHandle.Offset(mSceneColorRtvIndex, mRtvDescriptorSize);
     D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
@@ -530,6 +701,19 @@ void TerrainApp::SetupDescriptorHeaps()
     rtvDesc.Texture2D.MipSlice = 0;
     md3dDevice->CreateRenderTargetView(mSceneColorBuffer.Get(), &rtvDesc, rtvCpuHandle);
 
+    // SRV для MotionVector
+    srvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    srvCpuHandle.Offset(mMotionVectorSrvIndex, mCbvSrvUavDescriptorSize);
+    srvDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+    md3dDevice->CreateShaderResourceView(mMotionVectorBuffer.Get(), &srvDesc, srvCpuHandle);
+
+    // RTV для MotionVector
+    rtvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    rtvCpuHandle.Offset(mMotionVectorRtvIndex, mRtvDescriptorSize);
+    rtvDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+    md3dDevice->CreateRenderTargetView(mMotionVectorBuffer.Get(), &rtvDesc, rtvCpuHandle);
+
+    // TAA дескрипторы
     srvCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
     srvCpuHandle.Offset(mTAAOutputSrvIndex, mCbvSrvUavDescriptorSize);
     srvGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
@@ -594,6 +778,9 @@ void TerrainApp::UpdateConstants(const GameTimer& gt)
     XMMATRIX view = mCamera.GetViewMatrix();
     XMMATRIX proj = mCamera.GetProjectionMatrix();
     
+    // Сохраняем ViewProj БЕЗ jitter для следующего кадра (как предыдущую матрицу)
+    XMMATRIX viewProjNoJitter = XMMatrixMultiply(view, proj);
+    
     // Apply jitter for TAA - modify projection matrix BEFORE multiplying with view
     if (mTAAEnabled)
     {
@@ -625,6 +812,8 @@ void TerrainApp::UpdateConstants(const GameTimer& gt)
     XMStoreFloat4x4(&passConstants.View, view);
     XMStoreFloat4x4(&passConstants.Proj, proj);
     XMStoreFloat4x4(&passConstants.ViewProj, viewProj);
+    XMStoreFloat4x4(&passConstants.ViewProjNoJitter, viewProjNoJitter);  // Для motion vectors
+    passConstants.PrevViewProj = mPrevViewProj;  // Предыдущая матрица для motion vectors
     passConstants.EyePosW = mCamera.GetPosition();
     passConstants.RenderTargetSize = XMFLOAT2((float)mClientWidth, (float)mClientHeight);
     passConstants.NearZ = 1.0f;
@@ -635,6 +824,9 @@ void TerrainApp::UpdateConstants(const GameTimer& gt)
     passConstants.NoiseSeed = mNoiseSeed;
 
     mPassCB->CopyData(0, passConstants);
+    
+    // Сохраняем ViewProj БЕЗ jitter для следующего кадра
+    XMStoreFloat4x4(&mPrevViewProj, viewProjNoJitter);
 }
 
 void TerrainApp::CullTiles()
@@ -717,19 +909,23 @@ BoundingFrustum TerrainApp::BuildFrustum() const
 void TerrainApp::CreateTAARootSignature()
 {
     CD3DX12_DESCRIPTOR_RANGE texTable0;
-    texTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+    texTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);  // Current frame
     
     CD3DX12_DESCRIPTOR_RANGE texTable1;
-    texTable1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);
+    texTable1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);  // History frame
+    
+    CD3DX12_DESCRIPTOR_RANGE texTable2;
+    texTable2.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2);  // Motion vectors
 
-    CD3DX12_ROOT_PARAMETER slotRootParameter[3];
+    CD3DX12_ROOT_PARAMETER slotRootParameter[4];
     slotRootParameter[0].InitAsConstantBufferView(0);
     slotRootParameter[1].InitAsDescriptorTable(1, &texTable0, D3D12_SHADER_VISIBILITY_PIXEL);
     slotRootParameter[2].InitAsDescriptorTable(1, &texTable1, D3D12_SHADER_VISIBILITY_PIXEL);
+    slotRootParameter[3].InitAsDescriptorTable(1, &texTable2, D3D12_SHADER_VISIBILITY_PIXEL);
 
     auto staticSamplers = GetStaticSamplers();
 
-    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(3, slotRootParameter,
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(4, slotRootParameter,
         (UINT)staticSamplers.size(), staticSamplers.data(),
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
@@ -753,9 +949,6 @@ void TerrainApp::CreateTAARootSignature()
 
 void TerrainApp::CreateTAAPipelineState()
 {
-    mShaders["taaVS"] = d3dUtil::CompileShader(L"shaders/TAAResolve.hlsl", nullptr, "VS", "vs_5_0");
-    mShaders["taaPS"] = d3dUtil::CompileShader(L"shaders/TAAResolve.hlsl", nullptr, "PS", "ps_5_0");
-
     D3D12_GRAPHICS_PIPELINE_STATE_DESC taaPsoDesc = {};
     taaPsoDesc.InputLayout = { nullptr, 0 };
     taaPsoDesc.pRootSignature = mTAARootSignature.Get();
@@ -774,6 +967,117 @@ void TerrainApp::CreateTAAPipelineState()
     taaPsoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&taaPsoDesc, IID_PPV_ARGS(&mPSOs["taa"])));
+}
+
+void TerrainApp::CreateMotionVectorRootSignature()
+{
+    // Две текстуры: t0 - motion vectors, t1 - scene color (для velocity debug)
+    CD3DX12_DESCRIPTOR_RANGE texTable0;
+    texTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);  // Motion vectors (t0)
+    
+    CD3DX12_DESCRIPTOR_RANGE texTable1;
+    texTable1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);  // Scene color (t1)
+
+    CD3DX12_ROOT_PARAMETER slotRootParameter[2];
+    slotRootParameter[0].InitAsDescriptorTable(1, &texTable0, D3D12_SHADER_VISIBILITY_PIXEL);
+    slotRootParameter[1].InitAsDescriptorTable(1, &texTable1, D3D12_SHADER_VISIBILITY_PIXEL);
+
+    auto staticSamplers = GetStaticSamplers();
+
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(2, slotRootParameter,
+        (UINT)staticSamplers.size(), staticSamplers.data(),
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+    ComPtr<ID3DBlob> serializedRootSig = nullptr;
+    ComPtr<ID3DBlob> errorBlob = nullptr;
+    HRESULT hr = D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+        serializedRootSig.GetAddressOf(), errorBlob.GetAddressOf());
+
+    if (errorBlob != nullptr)
+    {
+        OutputDebugStringA((char*)errorBlob->GetBufferPointer());
+    }
+    ThrowIfFailed(hr);
+
+    ThrowIfFailed(md3dDevice->CreateRootSignature(
+        0,
+        serializedRootSig->GetBufferPointer(),
+        serializedRootSig->GetBufferSize(),
+        IID_PPV_ARGS(&mMotionVectorRootSignature)));
+}
+
+void TerrainApp::CreateMotionVectorPipelineState()
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC motionPsoDesc = {};
+    motionPsoDesc.InputLayout = { nullptr, 0 };
+    motionPsoDesc.pRootSignature = mMotionVectorRootSignature.Get();
+    motionPsoDesc.VS = { mShaders["motionVS"]->GetBufferPointer(), mShaders["motionVS"]->GetBufferSize() };
+    motionPsoDesc.PS = { mShaders["motionPS"]->GetBufferPointer(), mShaders["motionPS"]->GetBufferSize() };
+    motionPsoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    motionPsoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    motionPsoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    motionPsoDesc.DepthStencilState.DepthEnable = false;
+    motionPsoDesc.SampleMask = UINT_MAX;
+    motionPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    motionPsoDesc.NumRenderTargets = 1;
+    motionPsoDesc.RTVFormats[0] = mBackBufferFormat;
+    motionPsoDesc.SampleDesc.Count = 1;
+    motionPsoDesc.SampleDesc.Quality = 0;
+    motionPsoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&motionPsoDesc, IID_PPV_ARGS(&mPSOs["motionVisualize"])));
+}
+
+void TerrainApp::CreateVelocityDebugPipelineState()
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC velocityDebugDesc = {};
+    velocityDebugDesc.InputLayout = { nullptr, 0 };  // Fullscreen triangle без vertex buffer
+    velocityDebugDesc.pRootSignature = mMotionVectorRootSignature.Get();  // Используем тот же root signature
+    velocityDebugDesc.VS = { mShaders["velocityDebugVS"]->GetBufferPointer(), mShaders["velocityDebugVS"]->GetBufferSize() };
+    velocityDebugDesc.PS = { mShaders["velocityDebugPS"]->GetBufferPointer(), mShaders["velocityDebugPS"]->GetBufferSize() };
+    velocityDebugDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    velocityDebugDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    velocityDebugDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    velocityDebugDesc.DepthStencilState.DepthEnable = false;  // Без depth test
+    velocityDebugDesc.SampleMask = UINT_MAX;
+    velocityDebugDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    velocityDebugDesc.NumRenderTargets = 1;
+    velocityDebugDesc.RTVFormats[0] = mBackBufferFormat;
+    velocityDebugDesc.SampleDesc.Count = 1;
+    velocityDebugDesc.SampleDesc.Quality = 0;
+    velocityDebugDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&velocityDebugDesc, IID_PPV_ARGS(&mPSOs["velocityDebug"])));
+}
+
+void TerrainApp::CreateObjectPipelineState()
+{
+    // Input layout для объектов (локальные координаты)
+    std::vector<D3D12_INPUT_ELEMENT_DESC> objectInputLayout =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC objectPsoDesc = {};
+    objectPsoDesc.InputLayout = { objectInputLayout.data(), (UINT)objectInputLayout.size() };
+    objectPsoDesc.pRootSignature = mRootSignature.Get();
+    objectPsoDesc.VS = { mShaders["objectVS"]->GetBufferPointer(), mShaders["objectVS"]->GetBufferSize() };
+    objectPsoDesc.PS = { mShaders["terrainPS"]->GetBufferPointer(), mShaders["terrainPS"]->GetBufferSize() };
+    objectPsoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    objectPsoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    objectPsoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    objectPsoDesc.SampleMask = UINT_MAX;
+    objectPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    objectPsoDesc.NumRenderTargets = 2;  // Color + Motion Vectors
+    objectPsoDesc.RTVFormats[0] = mBackBufferFormat;
+    objectPsoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16_FLOAT;  // Motion vectors
+    objectPsoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
+    objectPsoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
+    objectPsoDesc.DSVFormat = mDepthStencilFormat;
+
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&objectPsoDesc, IID_PPV_ARGS(&mPSOs["object"])));
 }
 
 std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> TerrainApp::GetStaticSamplers()
@@ -839,22 +1143,40 @@ void TerrainApp::UpdateTAAConstants(const GameTimer& gt)
     taaConstants.BlendFactor = mFrameIndex == 0 ? 1.0f : 0.1f;
     
     mTAACB->CopyData(0, taaConstants);
+    
+    // Отладочная информация
+    static int debugFrameCounter = 0;
+    if (mTAAEnabled && debugFrameCounter++ % 120 == 0)
+    {
+        OutputDebugStringA(("TAA Status: Frame=" + std::to_string(mFrameIndex) + 
+                           ", BlendFactor=" + std::to_string(taaConstants.BlendFactor) +
+                           ", ShowMotionVectors=" + (mShowMotionVectors ? "ON" : "OFF") + "\n").c_str());
+    }
 }
 
 void TerrainApp::DrawSceneToTexture()
 {
+    // Переход буферов в состояние Render Target
     mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mSceneColorBuffer.Get(),
+        D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_RENDER_TARGET));
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mMotionVectorBuffer.Get(),
         D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_RENDER_TARGET));
 
     float clearColor[] = { 0.85f, 0.92f, 0.98f, 1.0f };
+    float motionClearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
     
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
-    rtvHandle.Offset(mSceneColorRtvIndex, mRtvDescriptorSize);
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandles[2];
+    rtvHandles[0] = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    rtvHandles[0].Offset(mSceneColorRtvIndex, mRtvDescriptorSize);
+    rtvHandles[1] = CD3DX12_CPU_DESCRIPTOR_HANDLE(mRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    rtvHandles[1].Offset(mMotionVectorRtvIndex, mRtvDescriptorSize);
     
-    mCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+    mCommandList->ClearRenderTargetView(rtvHandles[0], clearColor, 0, nullptr);
+    mCommandList->ClearRenderTargetView(rtvHandles[1], motionClearColor, 0, nullptr);
     mCommandList->ClearDepthStencilView(DepthStencilView(), D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 
-    mCommandList->OMSetRenderTargets(1, &rtvHandle, true, &DepthStencilView());
+    // Установка двух Render Targets: Color + Motion Vectors
+    mCommandList->OMSetRenderTargets(2, rtvHandles, false, &DepthStencilView());
 
     ID3D12DescriptorHeap* descriptorHeaps[] = { mSrvDescriptorHeap.Get() };
     mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
@@ -864,11 +1186,20 @@ void TerrainApp::DrawSceneToTexture()
 
     CD3DX12_GPU_DESCRIPTOR_HANDLE heightmapHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
     heightmapHandle.Offset(mHeightmapSrvIndex, mCbvSrvUavDescriptorSize);
-    mCommandList->SetGraphicsRootDescriptorTable(1, heightmapHandle);
+    mCommandList->SetGraphicsRootDescriptorTable(2, heightmapHandle);
 
+    // Рендеринг ландшафта
+    mCommandList->SetPipelineState(mPSOs["terrain"].Get());
     mCommandList->IASetVertexBuffers(0, 1, &mTerrainVBV);
     mCommandList->IASetIndexBuffer(&mTerrainIBV);
     mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+
+    // Пустой ObjectConstants для ландшафта (ландшафт не двигается)
+    ObjectConstants terrainObjConstants;
+    terrainObjConstants.World = MathHelper::Identity4x4();
+    terrainObjConstants.PrevWorld = MathHelper::Identity4x4();
+    mObjectCB->CopyData(0, terrainObjConstants);
+    mCommandList->SetGraphicsRootConstantBufferView(1, mObjectCB->Resource()->GetGPUVirtualAddress());
 
     for (auto* tile : mVisibleTiles)
     {
@@ -877,13 +1208,16 @@ void TerrainApp::DrawSceneToTexture()
         {
             CD3DX12_GPU_DESCRIPTOR_HANDLE colorHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
             colorHandle.Offset(texIndex, mCbvSrvUavDescriptorSize);
-            mCommandList->SetGraphicsRootDescriptorTable(2, colorHandle);
+            mCommandList->SetGraphicsRootDescriptorTable(3, colorHandle);
         }
 
         mCommandList->DrawIndexedInstanced(tile->IndexCount, 1, tile->IndexOffset, tile->VertexOffset, 0);
     }
 
+    // Переход буферов обратно в Shader Resource
     mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mSceneColorBuffer.Get(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ));
+    mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mMotionVectorBuffer.Get(),
         D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ));
 }
 
@@ -916,13 +1250,20 @@ void TerrainApp::ResolveTAA()
 
     mCommandList->SetGraphicsRootConstantBufferView(0, mTAACB->Resource()->GetGPUVirtualAddress());
 
+    // Current frame (SceneColor)
     CD3DX12_GPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
     srvHandle.Offset(mSceneColorSrvIndex, mCbvSrvUavDescriptorSize);
     mCommandList->SetGraphicsRootDescriptorTable(1, srvHandle);
 
+    // History frame
     srvHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
     srvHandle.Offset(mTAAHistorySrvIndex, mCbvSrvUavDescriptorSize);
     mCommandList->SetGraphicsRootDescriptorTable(2, srvHandle);
+
+    // Motion vectors
+    srvHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    srvHandle.Offset(mMotionVectorSrvIndex, mCbvSrvUavDescriptorSize);
+    mCommandList->SetGraphicsRootDescriptorTable(3, srvHandle);
 
     mCommandList->IASetVertexBuffers(0, 0, nullptr);
     mCommandList->IASetIndexBuffer(nullptr);

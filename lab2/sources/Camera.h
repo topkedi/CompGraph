@@ -14,12 +14,12 @@ public:
   void SetPosition(float x, float y, float z);
 
   // Movement
-  void MoveForward();
-  void MoveBackward();
-  void MoveLeft();
-  void MoveRight();
-  void MoveUp();
-  void MoveDown();
+  void MoveForward(bool fast = false);
+  void MoveBackward(bool fast = false);
+  void MoveLeft(bool fast = false);
+  void MoveRight(bool fast = false);
+  void MoveUp(bool fast = false);
+  void MoveDown(bool fast = false);
 
   // Rotation
   void TurnLeft();

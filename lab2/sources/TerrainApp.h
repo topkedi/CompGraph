@@ -21,6 +21,8 @@ struct PassConstants
     DirectX::XMFLOAT4X4 View = MathHelper::Identity4x4();
     DirectX::XMFLOAT4X4 Proj = MathHelper::Identity4x4();
     DirectX::XMFLOAT4X4 ViewProj = MathHelper::Identity4x4();
+    DirectX::XMFLOAT4X4 PrevViewProj = MathHelper::Identity4x4();  // Для motion vectors
+    DirectX::XMFLOAT4X4 ViewProjNoJitter = MathHelper::Identity4x4();  // Для motion vectors (без jitter)
     DirectX::XMFLOAT3 EyePosW = { 0.0f, 0.0f, 0.0f };
     float Padding1;
     DirectX::XMFLOAT2 RenderTargetSize = { 0.0f, 0.0f };
@@ -38,6 +40,12 @@ struct TAAConstants
     DirectX::XMFLOAT2 ScreenSize = { 0.0f, 0.0f };
     float BlendFactor = 0.1f;
     DirectX::XMFLOAT3 Padding = { 0.0f, 0.0f, 0.0f };
+};
+
+struct ObjectConstants
+{
+    DirectX::XMFLOAT4X4 World = MathHelper::Identity4x4();
+    DirectX::XMFLOAT4X4 PrevWorld = MathHelper::Identity4x4();  // Для motion vectors объекта
 };
 
 struct TerrainTileInfo
@@ -75,9 +83,13 @@ private:
 
     void CreateRootSignature();
     void CreateTAARootSignature();
+    void CreateMotionVectorRootSignature();  // Для визуализации motion vectors
     void CompileShaders();
     void CreatePipelineState();
     void CreateTAAPipelineState();
+    void CreateMotionVectorPipelineState();  // Для визуализации motion vectors
+    void CreateVelocityDebugPipelineState();  // Для velocity debug (красный оверлей)
+    void CreateObjectPipelineState();  // Для анимированных объектов
     void GenerateTerrainMesh();
     void SetupDescriptorHeaps();
     void LoadTerrainTextures();
@@ -92,6 +104,7 @@ private:
 private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature = nullptr;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mTAARootSignature = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mMotionVectorRootSignature = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mSrvDescriptorHeap = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mRtvHeap = nullptr;
 
@@ -118,6 +131,7 @@ private:
 
     std::unique_ptr<UploadBuffer<PassConstants>> mPassCB = nullptr;
     std::unique_ptr<UploadBuffer<TAAConstants>> mTAACB = nullptr;
+    std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB = nullptr;
 
     Camera mCamera;
     POINT mLastMousePos;
@@ -133,12 +147,20 @@ private:
     // TAA
     std::unique_ptr<TemporalAA> mTemporalAA = nullptr;
     Microsoft::WRL::ComPtr<ID3D12Resource> mSceneColorBuffer = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mMotionVectorBuffer = nullptr;
     bool mTAAEnabled = false;
+    bool mShowMotionVectors = false;  // Флаг для отображения motion vectors
+    bool mShowVelocityDebug = false;  // Флаг для velocity debug (красный оверлей)
     int mFrameIndex = 0;
     UINT mSceneColorSrvIndex = 0;
     UINT mSceneColorRtvIndex = 0;
+    UINT mMotionVectorSrvIndex = 0;
+    UINT mMotionVectorRtvIndex = 0;
     UINT mTAAOutputSrvIndex = 0;
     UINT mTAAOutputRtvIndex = 0;
     UINT mTAAHistorySrvIndex = 0;
     UINT mTAAHistoryRtvIndex = 0;
+    
+    // Предыдущие матрицы для motion vectors
+    DirectX::XMFLOAT4X4 mPrevViewProj = MathHelper::Identity4x4();
 };

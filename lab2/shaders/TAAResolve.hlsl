@@ -1,5 +1,5 @@
 //***************************************************************************************
-// TAAResolve.hlsl - Temporal Anti-Aliasing resolve pass
+// TAAResolve.hlsl - Temporal Anti-Aliasing resolve pass with Motion Vectors
 //***************************************************************************************
 
 cbuffer cbTAA : register(b0)
@@ -12,6 +12,7 @@ cbuffer cbTAA : register(b0)
 
 Texture2D gCurrentFrame  : register(t0);
 Texture2D gHistoryFrame  : register(t1);
+Texture2D gMotionVectors : register(t2);
 
 SamplerState gsamPointClamp  : register(s1);
 SamplerState gsamLinearClamp : register(s3);
@@ -60,10 +61,21 @@ float4 PS(VertexOut pin) : SV_Target
     // Sample current frame
     float3 currentRGB = gCurrentFrame.SampleLevel(gsamPointClamp, uv, 0).rgb;
     
-    // Sample history with bilinear filtering
-    float3 historyRGB = gHistoryFrame.SampleLevel(gsamLinearClamp, uv, 0).rgb;
+    // Sample motion vector для текущего пикселя
+    float2 motionVector = gMotionVectors.SampleLevel(gsamPointClamp, uv, 0).rg;
     
-    // Gather 3x3 neighborhood in YCoCg space
+    // Motion vector уже в UV пространстве, просто вычитаем для получения history UV
+    float2 historyUV = uv - motionVector;
+    
+    // Проверяем, что history UV в пределах экрана
+    bool validHistory = all(historyUV >= 0.0) && all(historyUV <= 1.0);
+    
+    // Sample history с motion-compensated UV
+    float3 historyRGB = validHistory ? 
+        gHistoryFrame.SampleLevel(gsamLinearClamp, historyUV, 0).rgb :
+        currentRGB;  // Fallback к текущему кадру если история вне экрана
+    
+    // Gather 3x3 neighborhood в YCoCg space
     float3 minColor = float3(9999, 9999, 9999);
     float3 maxColor = float3(-9999, -9999, -9999);
     float3 m1 = float3(0, 0, 0);
@@ -96,13 +108,18 @@ float4 PS(VertexOut pin) : SV_Target
     float3 aabbMin = max(minColor, m1 - gamma * sigma);
     float3 aabbMax = min(maxColor, m1 + gamma * sigma);
     
-    // Clamp history in YCoCg space
+    // Clamp history в YCoCg space
     float3 historyYCoCg = RGBToYCoCg(historyRGB);
     float3 clampedHistoryYCoCg = clamp(historyYCoCg, aabbMin, aabbMax);
     float3 clampedHistoryRGB = YCoCgToRGB(clampedHistoryYCoCg);
     
-    // Blend
-    float3 finalColor = lerp(clampedHistoryRGB, currentRGB, gBlendFactor);
+    // Адаптивный blend factor на основе motion vector magnitude
+    float motionLength = length(motionVector * gScreenSize);
+    float adaptiveBlend = lerp(gBlendFactor, 0.8, saturate(motionLength / 50.0));
+    
+    // Blend с учетом валидности истории
+    float finalBlendFactor = validHistory ? adaptiveBlend : 1.0;
+    float3 finalColor = lerp(clampedHistoryRGB, currentRGB, finalBlendFactor);
     
     return float4(max(finalColor, 0.0), 1.0);
 }

@@ -5,6 +5,8 @@ cbuffer PassConstants : register(b0)
   matrix gView;
   matrix gProj;
   matrix gViewProj;
+  matrix gPrevViewProj;  // Предыдущая матрица ViewProj для motion vectors
+  matrix gViewProjNoJitter;  // Текущая матрица ViewProj БЕЗ jitter для motion vectors
   float3 gEyePosW;
   float gPadding1;
   float2 gRenderTargetSize;
@@ -53,8 +55,14 @@ PixelIn DS(PatchTess patchTess, float2 uv : SV_DomainLocation, const OutputPatch
   float3 bitangent = normalize(float3(0, hU - hD, 2.0f * texelSize * 2048.0f));
   pout.normal = normalize(cross(bitangent, tangent));
 
+  // Вычисление текущей позиции в проекции (сохраняем оригинальный порядок)
   pout.positionProjection = mul(float4(pout.positionWorld, 1.0f), gView);
   pout.positionProjection = mul(pout.positionProjection, gProj);
+  
+  // Для motion vectors: текущая и предыдущая позиции в NDC
+  // Используем ViewProjNoJitter для текущей позиции, чтобы избежать ложных motion vectors от jitter
+  pout.currentPos = mul(float4(pout.positionWorld, 1.0f), gViewProjNoJitter);
+  pout.prevPos = mul(float4(pout.positionWorld, 1.0f), gPrevViewProj);
 
   return pout;
 }
