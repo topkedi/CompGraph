@@ -1,0 +1,152 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Assets">
+      <UniqueIdentifier>955e77e1-1a69-4abd-b526-044beea6e3c5</UniqueIdentifier>
+      <Extensions>ico;cur;bmp;dds;dlg;fbx;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tga;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Sources">
+      <UniqueIdentifier>{4896933f-5837-4486-a88b-3f9df542da1e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Common">
+      <UniqueIdentifier>{af065705-1c72-4111-8c48-443d53aaa56c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Shaders">
+      <UniqueIdentifier>{8b6c8e27-93a7-4c50-9bfe-78edaefdd3f3}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="sources\Camera.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\d3dApp.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\d3dUtil.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\d3dx12.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\DDSTextureLoader.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\GameTimer.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\MathHelper.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\pch.h">
+      <Filter>Common</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\TerrainApp.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\TemporalAA.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\UploadBuffer.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\QuadTree.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\VoxelWorld.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\MarchingTables.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\Common.h">
+      <Filter>Shaders</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="sources\Camera.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\d3dApp.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\d3dUtil.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\DDSTextureLoader.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\GameTimer.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\Main.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\MathHelper.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\pch.cpp">
+      <Filter>Common</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\TerrainApp.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\TemporalAA.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\QuadTree.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\VoxelWorld.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="sources\MarchingTables.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="settings.manifest">
+      <Filter>Assets</Filter>
+    </Manifest>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resource.rc">
+      <Filter>Assets</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config">
+      <Filter>Assets</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="resources\directx.ico">
+      <Filter>Assets</Filter>
+    </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="shaders\ps.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\hs.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\vs.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\ds.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\TAAResolve.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\voxel_vs.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\voxel_ps.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="shaders\voxel_mc_cs.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+  </ItemGroup>
+</Project>
